@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tap2Review — Link Maker</title>
+<style>
+  :root{--ink:#12141a;--accent:#2f5eff;--muted:#8a8f9a;--line:#e8e9ed;--bg:#fbfbfc}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:22px 18px 60px}
+  h1{font-size:19px;font-weight:700;letter-spacing:-.02em;margin:0 0 2px;display:flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:2px;background:var(--accent)}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 20px}
+  .big{width:100%;padding:16px;font-size:17px;border:1.5px solid var(--line);border-radius:13px;
+    outline:none;background:#fff;font-family:inherit}
+  .big:focus{border-color:var(--accent)}
+  .row{display:flex;gap:8px;margin-top:10px}
+  .btn{padding:16px 18px;font-size:15px;font-weight:600;border:0;border-radius:13px;
+    background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .btn:disabled{opacity:.4}
+  .btn.block{width:100%}
+  .hit{border:1px solid var(--line);border-radius:13px;padding:15px;margin-top:9px;cursor:pointer;background:#fff}
+  .hit:active{background:#f5f8ff}
+  .hit .n{font-size:15px;font-weight:600}
+  .hit .a{font-size:12px;color:var(--muted);margin-top:2px}
+  .hit .s{font-size:12px;color:var(--muted);margin-top:6px}
+  .hit .s b{color:var(--ink)}
+  .result{background:#fff;border:1.5px solid var(--accent);border-radius:15px;padding:18px;margin-top:16px}
+  .result .lbl{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .result .nm{font-size:15px;font-weight:700;margin-bottom:12px}
+  .url{background:#f5f8ff;border-radius:10px;padding:14px;font-size:14px;
+    font-family:ui-monospace,monospace;word-break:break-all;color:var(--ink);margin-bottom:12px;line-height:1.5}
+  .copy{width:100%;padding:16px;font-size:16px;font-weight:700;border:0;border-radius:12px;
+    background:var(--accent);color:#fff;cursor:pointer;font-family:inherit}
+  .copy.done{background:#1a7f4b}
+  .toggle{font-size:13px;color:var(--accent);text-align:center;margin-top:18px;cursor:pointer}
+  .err{color:#c0392b;font-size:13px;margin-top:10px}
+  .paste{margin-top:14px;padding:16px;background:#fff;border:1px solid var(--line);border-radius:13px}
+  .paste label{display:block;font-size:12px;font-weight:600;margin-bottom:6px}
+  .paste input{width:100%;padding:13px;font-size:15px;border:1px solid var(--line);border-radius:10px;
+    outline:none;font-family:ui-monospace,monospace;margin-bottom:10px}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:6px}
+  .cfg{margin-top:26px;padding-top:18px;border-top:1px solid var(--line)}
+  .cfg summary{font-size:12px;color:var(--muted);cursor:pointer}
+  .cfg input{width:100%;padding:11px;font-size:13px;border:1px solid var(--line);border-radius:9px;margin-top:8px;
+    font-family:ui-monospace,monospace}
+  .next{margin-top:16px;font-size:13px;color:var(--muted);line-height:1.6}
+  .next b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot"></span>Link Maker</h1>
+  <p class="sub">Type a business name, tap it, copy the link. Paste that into NFC Tools to write the card.</p>
+  <div id="app"></div>
+
+  <details class="cfg">
+    <summary>Settings</summary>
+    <input id="fn" placeholder="admin-api function URL">
+    <input id="tk" placeholder="admin token">
+    <div class="hint" style="margin-top:8px" id="cfgsave"></div>
+  </details>
+</div>
+
+<script>
+const FN = () => localStorage.getItem('t2r_fn') || '';
+const TK = () => localStorage.getItem('t2r_token') || '';
+
+async function api(action, payload={}){
+  if(!FN()) throw new Error('No function URL set. Open Settings below and paste your admin-api URL.');
+  let r;
+  try{
+    r = await fetch(FN(), {method:'POST',
+      headers:{'Content-Type':'application/json','x-admin-token':TK()},
+      body:JSON.stringify({action,...payload})});
+  }catch(e){ throw new Error('Could not reach the function. Check the URL and your connection.'); }
+  const text = await r.text();
+  let d;
+  try{ d = JSON.parse(text); }
+  catch{ throw new Error(`Got a web page instead of data (HTTP ${r.status}). Your function URL is wrong or the function isn't deployed — it should end in /admin-api.`); }
+  if(!r.ok) throw new Error(d.error || ('Request failed (HTTP '+r.status+')'));
+  return d;
+}
+
+let S = { q:'', hits:[], busy:false, err:'', result:null, mode:'name', pid:'', pname:'' };
+
+async function search(){
+  if(!S.q.trim()) return;
+  S.busy=true; S.err=''; S.result=null; render();
+  try{ S.hits = (await api('search_place',{query:S.q})).places; }
+  catch(e){ S.err=e.message; }
+  S.busy=false; render();
+}
+
+async function makeLink(place){
+  S.busy=true; S.err=''; render();
+  try{
+    const d = await api('quick_link',{
+      place_id:place.place_id, name:place.name,
+      rating:place.rating, review_count:place.review_count, label:'Stand'
+    });
+    S.result = { name:place.name, url:d.url };
+    S.hits=[];
+  }catch(e){ S.err=e.message; }
+  S.busy=false; render();
+}
+
+async function makeFromPid(){
+  if(!S.pid.trim()||!S.pname.trim()){ S.err='Need both Place ID and name'; render(); return; }
+  S.busy=true; S.err=''; render();
+  try{
+    const d = await api('quick_link',{place_id:S.pid.trim(), name:S.pname.trim(), label:'Stand'});
+    S.result = { name:S.pname, url:d.url };
+  }catch(e){ S.err=e.message; }
+  S.busy=false; render();
+}
+
+function copy(url){
+  navigator.clipboard.writeText(url);
+  const b = document.getElementById('copybtn');
+  b.textContent='✓ Copied — paste into NFC Tools'; b.classList.add('done');
+}
+
+function render(){
+  const a = document.getElementById('app');
+  if(S.result){
+    a.innerHTML = `
+      <div class="result">
+        <div class="lbl">Link for</div>
+        <div class="nm">${S.result.name}</div>
+        <div class="url">${S.result.url}</div>
+        <button class="copy" id="copybtn" onclick="copy('${S.result.url}')">Copy link</button>
+      </div>
+      <div class="next"><b>Next:</b> open NFC Tools › Write › Add a record › URL › paste › Write, then hold the card to your phone and tap-test it.</div>
+      <div class="toggle" onclick="S.result=null;S.q='';S.hits=[];render()">← Make another</div>`;
+    return;
+  }
+  a.innerHTML = `
+    <div class="row">
+      <input class="big" id="q" placeholder="Bluebird Coffee, Kennedy St" value="${S.q}"
+        oninput="S.q=this.value" onkeydown="if(event.key==='Enter')search()">
+      <button class="btn" onclick="search()" ${S.busy?'disabled':''}>${S.busy?'…':'Find'}</button>
+    </div>
+    ${S.err?`<div class="err">${S.err}</div>`:''}
+    ${S.hits.map((h,i)=>`
+      <div class="hit" onclick='makeLink(${JSON.stringify(h).replace(/'/g,"&#39;")})'>
+        <div class="n">${h.name}</div>
+        <div class="a">${h.address||''}</div>
+        <div class="s"><b>${h.review_count}</b> reviews · <b>${h.rating??'—'}</b>★${h.velocity_estimate?` · ~<b>${h.velocity_estimate}</b>/mo`:''}</div>
+      </div>`).join('')}
+    <div class="toggle" onclick="S.mode=S.mode==='name'?'pid':'name';render()">
+      ${S.mode==='name'?'Have the Place ID already? Paste it →':'← Back to name search'}</div>
+    ${S.mode==='pid'?`
+      <div class="paste">
+        <label>Business name</label>
+        <input value="${S.pname}" oninput="S.pname=this.value" placeholder="Bluebird Coffee" style="font-family:inherit">
+        <label>Place ID</label>
+        <input value="${S.pid}" oninput="S.pid=this.value" placeholder="ChIJ...">
+        <button class="btn block" onclick="makeFromPid()" ${S.busy?'disabled':''}>Make link</button>
+        <div class="hint">Only needed if name search shows the wrong branch. Otherwise ignore this.</div>
+      </div>`:''}`;
+  const q=document.getElementById('q');
+  if(q&&S.q&&document.activeElement!==q) q.setSelectionRange(q.value.length,q.value.length);
+}
+
+// settings wiring
+document.getElementById('fn').value = FN();
+document.getElementById('tk').value = TK();
+['fn','tk'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{
+  localStorage.setItem('t2r_fn',document.getElementById('fn').value.trim());
+  localStorage.setItem('t2r_token',document.getElementById('tk').value.trim());
+  document.getElementById('cfgsave').textContent='Saved on this device.';
+}));
+
+render();
+</script>
+</body>
+</html>
