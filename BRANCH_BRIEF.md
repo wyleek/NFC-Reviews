@@ -24,9 +24,33 @@ land independently at any point per `docs/PLAN.md`.
 - `admin.html`, `linkmaker.html`
 
 ## Acceptance checklist
-- [ ] Supabase project has core schema applied, RLS confirmed on all tables
-- [ ] All four Edge Functions deployed and reachable
-- [ ] `admin.html` can create a business + card end-to-end against the live API
-- [ ] `linkmaker.html` produces a working tap link that hits `redirect`
-- [ ] `tap2review-dashboard.jsx` renders real data, no sample/mock arrays left
-- [ ] `sync-reviews` runs on schedule and populates `review_snapshots`
+- [x] Supabase project has core schema applied, RLS confirmed on all tables
+- [x] All four Edge Functions deployed and reachable
+- [x] `admin.html` can create a business + card end-to-end against the live API
+- [x] `linkmaker.html` produces a working tap link that hits `redirect`
+- [x] `tap2review-dashboard.jsx` renders real data, no sample/mock arrays left
+- [x] `sync-reviews` runs on schedule and populates `review_snapshots`
+
+## Deploy notes
+
+Deployed to Supabase project **NFC Database** (`ehzwsqkrmxsfdfslxmpo`). See
+`supabase/README.md` for the live URLs, what secrets are set, and two
+correctness fixes made vs. the original `tap2review-backend.zip` (dropped
+tap-logging on `redirect`, dead tap-link URLs in `admin-api`) — that
+directory is now the source of truth; the zip is kept for history only.
+
+`admin.html`/`linkmaker.html` needed no code changes — they already take the
+function URL + admin token via a setup screen (stored in `localStorage`,
+never hardcoded). Every `admin-api` action (`search_place`, `create_business`,
+`add_competitor`, `list_businesses`, `quick_link`) was smoke-tested end-to-end
+via direct HTTP calls replicating exactly what those pages send; the actual
+HTML/JS UI itself wasn't driven in a browser (none available in this
+environment) — worth a quick manual click-through before calling this branch
+fully closed.
+
+The dashboard has no per-business login yet (out of scope here — see
+`docs/PLAN.md`), so it resolves which business to show via `?business=<id>`
+in the URL, falling back to the most recently created business if omitted.
+RLS was opened to read-only `SELECT` for the `anon`/`authenticated` roles on
+the tables/views it queries; writes stay exclusively behind the service-role
+Edge Functions. Scope that down once dashboard auth exists.
