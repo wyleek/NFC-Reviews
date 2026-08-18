@@ -45,8 +45,23 @@ the lead-engine's `dm_days`/`dm_window`/`source` fields folded in.
 - [x] Places-derived scoring fields for scraped businesses follow the rolling-window rule
 
 All done in `supabase/migrations/20260817120000_crm_data_model.sql` +
-the `scrape_prospects.py` rewrite. Not yet run against a live database
-(no local Postgres available to test-execute) — see that migration
-file's header for the two judgment calls it makes beyond this brief's
-literal wording (`visits` folded into `activities`; `businesses` also
-absorbs `prospects`' non-crm-spec durable columns).
+the `scrape_prospects.py` rewrite — see that migration file's header for
+the two judgment calls it makes beyond this brief's literal wording
+(`visits` folded into `activities`; `businesses` also absorbs
+`prospects`' non-crm-spec durable columns).
+
+## Deploy notes
+
+Rebased onto `main` (post-`console-live-data`) and applied to the live
+**NFC Database** Supabase project (`ehzwsqkrmxsfdfslxmpo`) — confirmed via
+`list_tables`: `businesses.stage` populated, unified `contacts`, and
+`activities`/`deals`/`scheduled_messages`/`places_lookup_cache` all present.
+
+Two gaps for whoever picks up `feature/crm-pipeline-board`:
+- The 5 new tables have RLS **enabled but no policies** — currently
+  unreadable/unwritable except via service-role Edge Functions. Add
+  read policies for `anon`/`authenticated` (matching `console-live-data`'s
+  pattern) once the dashboard/board needs to query them.
+- `scrape_prospects.py`'s upsert path hasn't been exercised against the
+  live DB yet (no real scrape run against real Places data) — worth a
+  dry run before relying on it.
