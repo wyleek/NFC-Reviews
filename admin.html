@@ -268,6 +268,11 @@ function pickPack(n){
   render();
 }
 
+function gbpConnectUrl(businessId){
+  const base = CFG.fnUrl.replace(/\/admin-api\/?$/, '/gbp-connect');
+  return `${base}/start?business_id=${encodeURIComponent(businessId)}`;
+}
+
 function vTags(){
   const c = S.created;
   return `
@@ -282,13 +287,19 @@ function vTags(){
       <div class="tagbox">
         <div class="lbl">${k.label}</div>
         <div class="ty">${k.card_type}</div>
-        <div class="link">https://${location.hostname==='localhost'?'tap2review.com':'tap2review.com'}/r/${k.slug}</div>
+        <div class="link">${k.url}</div>
         <div class="row">
           ${NFC_OK?`<button class="btn" onclick="writeTag('${k.url}',${i})">Write to card</button>`:''}
           <button class="btn ghost" onclick="copy('${k.url}',${i})">Copy link</button>
         </div>
         <div class="note" id="st${i}"></div>
       </div>`).join('')}
+  </div>
+
+  <div class="card">
+    <h2>Connect Google Business Profile</h2>
+    <p class="sub">Lets the dashboard show durable, ToS-safe rating/review history for this listing instead of the 30-day-rolling Places data. Needs Business Profile API access approved first — see <code>supabase/README.md</code>; the link below is safe to click anytime and will explain what's missing until then.</p>
+    <a class="btn ghost" href="${gbpConnectUrl(c.business.id)}" target="_blank" rel="noopener">Connect GBP</a>
   </div>
 
   <div class="card">

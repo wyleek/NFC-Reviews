@@ -175,21 +175,31 @@ function useBusinessId() {
 // Business, cards, full review-snapshot history, competitors — refetched
 // only when the business changes, not on every range change.
 function useBusinessData(businessId) {
-  const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [], competitors: [] });
+  const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [], usingGbp: false, competitors: [] });
 
   useEffect(() => {
     if (!businessId) { setState((s) => ({ ...s, loading: false })); return; }
     let cancelled = false;
     (async () => {
       setState((s) => ({ ...s, loading: true }));
-      const [{ data: business }, { data: cards }, { data: snapshots }, { data: competitors }] = await Promise.all([
+      const [{ data: business }, { data: cards }, { data: placesSnapshots }, { data: gbpSnapshots }, { data: competitors }] = await Promise.all([
         supabase.from("businesses").select("*").eq("id", businessId).maybeSingle(),
         supabase.from("cards").select("*").eq("business_id", businessId).order("created_at"),
         supabase.from("review_snapshots").select("captured_on, review_count, rating")
           .eq("business_id", businessId).order("captured_on"),
+        // gbp_review_history is durable (owner-authorized GBP data, no 30-day
+        // purge) — prefer it once feature/gbp-own-business-tracking has
+        // synced anything. There's no client-readable "connected?" flag
+        // (gbp_connections holds OAuth tokens and is service-role-only by
+        // design), so "has any rows" doubles as the connected signal here.
+        supabase.from("gbp_review_history").select("captured_on, review_count, rating")
+          .eq("business_id", businessId).order("captured_on"),
         supabase.from("competitors").select("id, name").eq("business_id", businessId),
       ]);
       if (cancelled) return;
+
+      const usingGbp = (gbpSnapshots?.length ?? 0) > 0;
+      const snapshots = usingGbp ? gbpSnapshots : (placesSnapshots ?? []);
 
       let competitorStats = [];
       if (competitors?.length) {
@@ -214,7 +224,8 @@ function useBusinessData(businessId) {
         loading: false,
         business: business ?? null,
         cards: cards ?? [],
-        snapshots: snapshots ?? [],
+        snapshots,
+        usingGbp,
         competitors: competitorStats,
       });
     })();
@@ -260,7 +271,7 @@ export default function Dashboard() {
   const wrapRef = useRef(null);
 
   const { businessId, resolving } = useBusinessId();
-  const { loading: bizLoading, business, cards, snapshots, competitors } = useBusinessData(businessId);
+  const { loading: bizLoading, business, cards, snapshots, usingGbp, competitors } = useBusinessData(businessId);
 
   const rangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
   const rangeEnd = custom ? startOfDay(custom[1]) : today;
@@ -506,6 +517,9 @@ export default function Dashboard() {
           <div className="mt-5 pt-4 border-t text-[12px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>
             Taps are counted exactly. Review totals come from your Google listing each day. Google doesn't reveal which
             review came from which tap, so these are shown side by side as trends — not one causing the other.
+            {" "}{usingGbp
+              ? <>Sourced from your connected Google Business Profile — kept for the full history.</>
+              : <>Sourced from Google's public listing data, kept for a rolling 30 days. <a href={`${REDIRECT_BASE.replace("/redirect", "/gbp-connect/start")}?business_id=${business.id}`} target="_blank" rel="noopener" style={{ color: ACCENT }}>Connect Google Business Profile</a> for full history.</>}
           </div>
         </Panel>
 
