@@ -37,9 +37,16 @@ the lead-engine's `dm_days`/`dm_window`/`source` fields folded in.
 - `scrape_prospects.py`
 
 ## Acceptance checklist
-- [ ] `businesses.stage` enum added and populated for existing rows
-- [ ] `prospects`/`places_cache`/`rating_observations` retired, data migrated
-- [ ] Single unified `contacts` schema (business_id-based), old dual schemas removed
-- [ ] `activities`, `deals`, `scheduled_messages` tables created per crm-spec.md
-- [ ] `scrape_prospects.py` writes to `businesses`/`contacts`, not `prospects`
-- [ ] Places-derived scoring fields for scraped businesses follow the rolling-window rule
+- [x] `businesses.stage` enum added and populated for existing rows
+- [x] `prospects`/`places_cache`/`rating_observations` retired, data migrated
+- [x] Single unified `contacts` schema (business_id-based), old dual schemas removed
+- [x] `activities`, `deals`, `scheduled_messages` tables created per crm-spec.md
+- [x] `scrape_prospects.py` writes to `businesses`/`contacts`, not `prospects`
+- [x] Places-derived scoring fields for scraped businesses follow the rolling-window rule
+
+All done in `supabase/migrations/20260817120000_crm_data_model.sql` +
+the `scrape_prospects.py` rewrite. Not yet run against a live database
+(no local Postgres available to test-execute) — see that migration
+file's header for the two judgment calls it makes beyond this brief's
+literal wording (`visits` folded into `activities`; `businesses` also
+absorbs `prospects`' non-crm-spec durable columns).
