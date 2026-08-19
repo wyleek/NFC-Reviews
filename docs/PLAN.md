@@ -81,3 +81,26 @@ top of the schema it defines).
 
 Each branch carries its own `BRANCH_BRIEF.md` at the repo root with the
 detailed scope, key files, and an acceptance checklist.
+
+## Recommended build order
+
+Work one branch per Claude session — `git checkout <branch>`, then start
+Claude fresh in that terminal. Keeps each branch's context clean instead of
+carrying the last branch's decisions into the next one.
+
+1. `feature/console-live-data` — foundation, no dependencies. Per the table
+   above it can land independently at any point, so do it first.
+2. `feature/crm-data-model` — also no dependencies. Independent of (1); if
+   running two sessions in parallel, pair it with `console-live-data`.
+   Otherwise do it second.
+3. `feature/gbp-own-business-tracking` — start only after `console-live-data`
+   is merged.
+4. `feature/competitor-rolling-tracking` — start only after
+   `console-live-data` is merged. Independent of (3); can run alongside it.
+5. `feature/crm-pipeline-board` — start only after `crm-data-model` is
+   merged. Do this last — it's built directly on that schema.
+
+This satisfies both dependency chains (`console-live-data` →
+`{gbp-own-business-tracking, competitor-rolling-tracking}` and
+`crm-data-model` → `crm-pipeline-board`) while keeping to one branch, one
+session, at a time.

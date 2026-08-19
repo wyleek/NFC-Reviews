@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Cell,
@@ -9,64 +10,40 @@ import {
 } from "lucide-react";
 
 /* ==================================================================
-   SAMPLE DATA — swap for Supabase queries when wiring up
+   SUPABASE — publishable key only, safe for the client. RLS grants
+   read-only SELECT on these tables/views; all writes go through the
+   service-role Edge Functions (admin-api, redirect, sync-reviews).
+   See supabase/migrations/*_dashboard_read_policies.sql.
 ================================================================== */
 
-const BUSINESS = {
-  name: "Bluebird Coffee",
-  address: "1420 Kennedy St NW, Washington, DC",
-  reviewsAtStart: 37,
-  rating: 4.7,
-  live: "Jun 8, 2026",
-};
+const SUPABASE_URL = "https://ehzwsqkrmxsfdfslxmpo.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_7aMWl0jH7_zYsN_iwE_Qcg_YxjGsbbw";
+const REDIRECT_BASE = "https://ehzwsqkrmxsfdfslxmpo.functions.supabase.co/redirect";
 
-const CARDS = [
-  { id: "counter", label: "Front counter", type: "stand",   slug: "bluebird-counter", lastTap: "12 min ago", weight: 0.60 },
-  { id: "t4",      label: "Table 4",       type: "placard", slug: "bluebird-t4",      lastTap: "1 hr ago",   weight: 0.26 },
-  { id: "badge",   label: "Manager badge", type: "badge",   slug: "bluebird-badge",   lastTap: "3 hr ago",   weight: 0.14 },
-];
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
-const TODAY = new Date(2026, 7, 16);
+const DAY_MS = 86400000;
+// Calendar day in the viewer's local timezone — must stay local, not UTC,
+// since it's used to bucket both local-midnight Date objects (below) and
+// parsed tap timestamps (via `new Date(t.created_at)`) onto the same axis
+// as the already-local "busiest hours" breakdown.
+const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (d, n) => new Date(d.getTime() + n * DAY_MS);
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 
-const SERIES = (() => {
-  const out = [];
-  let reviews = BUSINESS.reviewsAtStart;
-  for (let i = 69; i >= 0; i--) {
-    const d = new Date(TODAY); d.setDate(d.getDate() - i);
-    const dow = d.getDay();
-    const weekend = dow === 0 || dow === 6 ? 1.5 : 1;
-    const ramp = 0.55 + (69 - i) / 69 * 0.9;
-    const taps = Math.max(2, Math.round((6 + Math.sin(i / 3) * 3 + ((i * 37) % 11) * 0.6) * weekend * ramp));
-    if ((i * 13) % 10 < 7) reviews += (i * 7) % 3 === 0 ? 2 : 1;
-    out.push({
-      key: d.toISOString().slice(0, 10),
-      date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      d,
-      taps, reviews,
-      counter: Math.round(taps * 0.60),
-      t4: Math.round(taps * 0.26),
-      badge: Math.round(taps * 0.14),
-    });
+// Most recent snapshot with captured_on <= dateStr (snapshots must be sorted ascending).
+function snapshotAsOf(snapshots, dateStr) {
+  let found = null;
+  for (const s of snapshots) {
+    if (s.captured_on > dateStr) break;
+    found = s;
   }
-  return out;
-})();
+  return found;
+}
 
-const COMPETITORS = [
-  { name: "Grind House Cafe",  reviews: 214, rating: 4.4, gained30: 9, velocity: 9.0 },
-  { name: "The Daily Pour",    reviews: 96,  rating: 4.6, gained30: 4, velocity: 4.0 },
-  { name: "Kennedy St Coffee", reviews: 61,  rating: 4.2, gained30: 2, velocity: 2.0 },
-];
-
-const HOURS = [
-  { h: "6a", v: 4 }, { h: "7a", v: 18 }, { h: "8a", v: 41 }, { h: "9a", v: 37 },
-  { h: "10a", v: 26 }, { h: "11a", v: 22 }, { h: "12p", v: 48 }, { h: "1p", v: 39 },
-  { h: "2p", v: 24 }, { h: "3p", v: 19 }, { h: "4p", v: 15 }, { h: "5p", v: 11 },
-  { h: "6p", v: 7 }, { h: "7p", v: 3 },
-];
-
-const DEVICES = [
-  { name: "iPhone", value: 61 }, { name: "Android", value: 36 }, { name: "Other", value: 3 },
-];
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const HOUR_BUCKETS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]; // 6a – 7p
+const hourLabel = (h) => (h === 12 ? "12p" : h > 12 ? `${h - 12}p` : `${h}a`);
 
 const INK = "#12141a", ACCENT = "#2f5eff", MUTED = "#8a8f9a", LINE = "#e8e9ed", SOFT = "#c9d4ff";
 
@@ -103,8 +80,8 @@ function Tip({ active, payload, label }) {
 
 /* --------------------------- calendar picker --------------------------- */
 
-function RangePicker({ onApply, onClose }) {
-  const [month, setMonth] = useState(new Date(2026, 7, 1));
+function RangePicker({ today, onApply, onClose }) {
+  const [month, setMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [start, setStart] = useState(null);
   const [end, setEnd] = useState(null);
 
@@ -142,7 +119,7 @@ function RangePicker({ onApply, onClose }) {
           if (!d) return <div key={i} />;
           const sel = (start && d.getTime() === start.getTime()) || (end && d.getTime() === end.getTime());
           const mid = inRange(d);
-          const future = d > TODAY;
+          const future = d > today;
           return (
             <button key={i} disabled={future} onClick={() => pick(d)}
               className="h-8 text-[12px] rounded-md transition disabled:opacity-25"
@@ -172,14 +149,126 @@ function RangePicker({ onApply, onClose }) {
   );
 }
 
+/* ============================ data loading ============================ */
+
+// Resolves which business to show: ?business=<uuid> in the URL, or (until
+// there's per-business login) the most recently created one.
+function useBusinessId() {
+  const [businessId, setBusinessId] = useState(null);
+  const [resolving, setResolving] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const fromUrl = new URLSearchParams(window.location.search).get("business");
+      if (fromUrl) { setBusinessId(fromUrl); setResolving(false); return; }
+      const { data } = await supabase
+        .from("businesses").select("id").order("created_at", { ascending: false }).limit(1);
+      if (!cancelled) { setBusinessId(data?.[0]?.id ?? null); setResolving(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { businessId, resolving };
+}
+
+// Business, cards, full review-snapshot history, competitors — refetched
+// only when the business changes, not on every range change.
+function useBusinessData(businessId) {
+  const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [], competitors: [] });
+
+  useEffect(() => {
+    if (!businessId) { setState((s) => ({ ...s, loading: false })); return; }
+    let cancelled = false;
+    (async () => {
+      setState((s) => ({ ...s, loading: true }));
+      const [{ data: business }, { data: cards }, { data: snapshots }, { data: competitors }] = await Promise.all([
+        supabase.from("businesses").select("*").eq("id", businessId).maybeSingle(),
+        supabase.from("cards").select("*").eq("business_id", businessId).order("created_at"),
+        supabase.from("review_snapshots").select("captured_on, review_count, rating")
+          .eq("business_id", businessId).order("captured_on"),
+        supabase.from("competitors").select("id, name").eq("business_id", businessId),
+      ]);
+      if (cancelled) return;
+
+      let competitorStats = [];
+      if (competitors?.length) {
+        const ids = competitors.map((c) => c.id);
+        const [{ data: velocity }, { data: compSnaps }] = await Promise.all([
+          supabase.from("competitor_velocity").select("*").in("competitor_id", ids),
+          supabase.from("competitor_snapshots").select("competitor_id, rating, captured_on")
+            .in("competitor_id", ids).order("captured_on"),
+        ]);
+        const latestRating = {};
+        for (const s of compSnaps ?? []) latestRating[s.competitor_id] = s.rating; // last write wins (ascending order)
+        competitorStats = (velocity ?? []).map((v) => ({
+          name: v.name,
+          reviews: v.review_count ?? 0,
+          rating: latestRating[v.competitor_id] ?? null,
+          gained30: v.reviews_gained ?? 0,
+          velocity: v.reviews_per_month ?? 0,
+        })).sort((a, b) => b.reviews - a.reviews);
+      }
+
+      setState({
+        loading: false,
+        business: business ?? null,
+        cards: cards ?? [],
+        snapshots: snapshots ?? [],
+        competitors: competitorStats,
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [businessId]);
+
+  return state;
+}
+
+// Raw taps for [priorStart, rangeEnd] — enough to derive the current period,
+// the prior period (for delta arrows), the per-card breakdown, device split,
+// and hourly split, all from one query.
+function useTaps(businessId, priorStart, rangeEnd) {
+  const [state, setState] = useState({ loading: true, taps: [] });
+
+  useEffect(() => {
+    if (!businessId) { setState({ loading: false, taps: [] }); return; }
+    let cancelled = false;
+    (async () => {
+      setState((s) => ({ ...s, loading: true }));
+      const { data } = await supabase
+        .from("taps")
+        .select("card_id, device_type, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", priorStart.toISOString())
+        .lt("created_at", addDays(rangeEnd, 1).toISOString());
+      if (!cancelled) setState({ loading: false, taps: data ?? [] });
+    })();
+    return () => { cancelled = true; };
+  }, [businessId, priorStart.getTime(), rangeEnd.getTime()]);
+
+  return state;
+}
+
 /* ============================== dashboard ============================== */
 
 export default function Dashboard() {
+  const today = useMemo(() => startOfDay(new Date()), []);
   const [range, setRange] = useState(30);
   const [custom, setCustom] = useState(null);
   const [showCal, setShowCal] = useState(false);
   const [openCard, setOpenCard] = useState(null);
   const wrapRef = useRef(null);
+
+  const { businessId, resolving } = useBusinessId();
+  const { loading: bizLoading, business, cards, snapshots, competitors } = useBusinessData(businessId);
+
+  const rangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
+  const rangeEnd = custom ? startOfDay(custom[1]) : today;
+  const spanDays = Math.max(1, Math.round((rangeEnd - rangeStart) / DAY_MS) + 1);
+  const priorStart = addDays(rangeStart, -spanDays);
+  const priorEnd = addDays(rangeStart, -1);
+
+  const { loading: tapsLoading, taps } = useTaps(businessId, priorStart, rangeEnd);
 
   useEffect(() => {
     const h = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setShowCal(false); };
@@ -187,34 +276,99 @@ export default function Dashboard() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  const data = useMemo(() => {
-    if (custom) return SERIES.filter((s) => s.d >= custom[0] && s.d <= custom[1]);
-    return SERIES.slice(-range);
-  }, [range, custom]);
+  // One bucket per day in [priorStart, rangeEnd], each with a total, a count
+  // per card, and a forward-filled cumulative review count from snapshots.
+  const allDays = useMemo(() => {
+    const out = [];
+    const n = Math.round((rangeEnd - priorStart) / DAY_MS) + 1;
+    for (let i = 0; i < n; i++) {
+      const d = addDays(priorStart, i);
+      const key = dateKey(d);
+      const asOf = snapshotAsOf(snapshots, key);
+      const row = {
+        key, d,
+        date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        taps: 0,
+        reviews: asOf ? asOf.review_count : (snapshots[0]?.review_count ?? business?.current_review_count ?? null),
+      };
+      for (const c of cards) row[c.id] = 0;
+      out.push(row);
+    }
+    return out;
+  }, [priorStart.getTime(), rangeEnd.getTime(), snapshots, cards, business]);
+
+  const dayIndex = useMemo(() => {
+    const m = new Map();
+    allDays.forEach((row, i) => m.set(row.key, i));
+    return m;
+  }, [allDays]);
+
+  const bucketed = useMemo(() => {
+    const rows = allDays.map((r) => ({ ...r }));
+    for (const t of taps) {
+      const i = dayIndex.get(dateKey(new Date(t.created_at)));
+      if (i == null) continue;
+      rows[i].taps += 1;
+      if (t.card_id && rows[i][t.card_id] != null) rows[i][t.card_id] += 1;
+    }
+    return rows;
+  }, [allDays, dayIndex, taps]);
+
+  const data = useMemo(() => bucketed.filter((r) => r.d >= rangeStart), [bucketed, rangeStart]);
+  const priorData = useMemo(() => bucketed.filter((r) => r.d < rangeStart), [bucketed, rangeStart]);
 
   const days = data.length || 1;
   const tapsInRange = data.reduce((s, d) => s + d.taps, 0);
-  const revStart = data[0]?.reviews ?? BUSINESS.reviewsAtStart;
-  const revEnd = data[data.length - 1]?.reviews ?? BUSINESS.reviewsAtStart;
-  const revGained = revEnd - revStart;
+  const revStart = data[0]?.reviews ?? null;
+  const revEnd = data[data.length - 1]?.reviews ?? revStart;
+  const revGained = revStart != null && revEnd != null ? revEnd - revStart : 0;
 
-  const prior = useMemo(() => {
-    const endIdx = SERIES.findIndex((s) => s.key === data[0]?.key);
-    const slice = SERIES.slice(Math.max(0, endIdx - days), Math.max(0, endIdx));
-    return {
-      taps: slice.reduce((s, d) => s + d.taps, 0),
-      rev: slice.length ? slice[slice.length - 1].reviews - slice[0].reviews : 0,
-    };
-  }, [data, days]);
+  const priorTaps = priorData.reduce((s, d) => s + d.taps, 0);
+  const priorRevStart = priorData[0]?.reviews ?? revStart;
+  const priorRevEnd = priorData[priorData.length - 1]?.reviews ?? priorRevStart;
+  const priorRevGained = priorRevStart != null && priorRevEnd != null ? priorRevEnd - priorRevStart : 0;
 
   const pct = (now, before) => (!before ? null : Math.round(((now - before) / before) * 100));
-  const tapDelta = pct(tapsInRange, prior.taps);
-  const revDelta = pct(revGained, prior.rev);
+  const tapDelta = pct(tapsInRange, priorTaps);
+  const revDelta = pct(revGained, priorRevGained);
   const velocity = (revGained / days) * 30;
 
   const label = custom
-    ? `${custom[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${custom[1].toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    ? `${rangeStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${rangeEnd.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
     : `Last ${range} days`;
+
+  // Device + hourly splits, straight from the raw taps in the current range.
+  const currentTaps = useMemo(
+    () => taps.filter((t) => { const d = new Date(t.created_at); return d >= rangeStart && d < addDays(rangeEnd, 1); }),
+    [taps, rangeStart.getTime(), rangeEnd.getTime()],
+  );
+
+  const DEVICES = useMemo(() => {
+    const counts = { ios: 0, android: 0, other: 0 };
+    for (const t of currentTaps) counts[t.device_type === "ios" || t.device_type === "android" ? t.device_type : "other"]++;
+    const total = Math.max(1, currentTaps.length);
+    return [
+      { name: "iPhone", value: Math.round((counts.ios / total) * 100) },
+      { name: "Android", value: Math.round((counts.android / total) * 100) },
+      { name: "Other", value: Math.round((counts.other / total) * 100) },
+    ];
+  }, [currentTaps]);
+
+  const HOURS = useMemo(() => {
+    const counts = Object.fromEntries(HOUR_BUCKETS.map((h) => [h, 0]));
+    for (const t of currentTaps) {
+      const h = new Date(t.created_at).getHours();
+      if (counts[h] != null) counts[h]++;
+    }
+    return HOUR_BUCKETS.map((h) => ({ h: hourLabel(h), v: counts[h] }));
+  }, [currentTaps]);
+
+  const peakHour = useMemo(() => Math.max(0, ...HOURS.map((h) => h.v)), [HOURS]);
+
+  const busiestHours = useMemo(() => {
+    const top = [...HOURS].sort((a, b) => b.v - a.v).filter((h) => h.v > 0).slice(0, 2);
+    return top.map((h) => h.h).join(" and ");
+  }, [HOURS]);
 
   const Metric = ({ label: l, value, delta, sub }) => (
     <div className="flex-1 min-w-[160px] px-6 py-6">
@@ -233,25 +387,31 @@ export default function Dashboard() {
     </div>
   );
 
-  const topCard = [...CARDS].sort((a, b) => b.weight - a.weight)[0];
-  const ahead = COMPETITORS.filter((c) => c.reviews > revEnd).length;
-  const gap = COMPETITORS[0].reviews - revEnd;
-  const netPace = Math.max(0.5, velocity - COMPETITORS[0].velocity);
+  const cardTapsInRange = (id) => data.reduce((s, d) => s + (d[id] ?? 0), 0);
+  const topCard = cards.length
+    ? [...cards].sort((a, b) => cardTapsInRange(b.id) - cardTapsInRange(a.id))[0]
+    : null;
+  const topCardShare = topCard ? Math.round((cardTapsInRange(topCard.id) / Math.max(1, tapsInRange)) * 100) : 0;
+
+  const topCompetitor = competitors[0] ?? null;
+  const ahead = topCompetitor ? competitors.filter((c) => c.reviews > (revEnd ?? 0)).length : 0;
+  const gap = topCompetitor ? topCompetitor.reviews - (revEnd ?? 0) : 0;
+  const netPace = topCompetitor ? Math.max(0.5, velocity - topCompetitor.velocity) : 0;
 
   const RECS = [
-    gap > 0 && {
+    topCompetitor && gap > 0 && {
       tag: "Close the gap",
-      title: `You're ${gap} reviews behind ${COMPETITORS[0].name}`,
-      body: `You're gaining ${velocity.toFixed(1)} reviews a month to their ${COMPETITORS[0].velocity}. Keep that up and you'd pass them in roughly ${Math.ceil(gap / netPace)} months. Adding a card at a second touchpoint is the fastest way to speed that up.`,
+      title: `You're ${gap} reviews behind ${topCompetitor.name}`,
+      body: `You're gaining ${velocity.toFixed(1)} reviews a month to their ${topCompetitor.velocity}. Keep that up and you'd pass them in roughly ${Math.ceil(gap / netPace)} months. Adding a card at a second touchpoint is the fastest way to speed that up.`,
     },
-    {
+    topCard && {
       tag: "Placement",
-      title: `${topCard.label} drives ${Math.round(topCard.weight * 100)}% of your taps`,
+      title: `${topCard.label} drives ${topCardShare}% of your taps`,
       body: "Your other placements are underperforming by comparison. Move them to where customers are already standing still — waiting on an order, or paying.",
     },
-    {
+    busiestHours && {
       tag: "Timing",
-      title: "8am and noon are your busiest tap hours",
+      title: `${busiestHours} ${busiestHours.includes(" and ") ? "are" : "is"} your busiest tap hour${busiestHours.includes(" and ") ? "s" : ""}`,
       body: "Remind whoever works those shifts to mention the card. A spoken ask alongside the stand consistently outperforms the stand sitting there on its own.",
     },
     {
@@ -260,6 +420,17 @@ export default function Dashboard() {
       body: "Google prohibits filtering who gets asked based on expected rating, and asking everyone honestly keeps your profile safe. Try: \"If you enjoyed it, we'd love your honest feedback — just tap here.\"",
     },
   ].filter(Boolean);
+
+  if (resolving || (businessId && bizLoading)) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: "-apple-system, sans-serif" }}>Loading…</div>;
+  }
+  if (!businessId || !business) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: "-apple-system, sans-serif", textAlign: "center", padding: 24 }}>
+        No business found. Onboard one in admin.html, then open this dashboard with <code>?business=&lt;id&gt;</code>.
+      </div>
+    );
+  }
 
   return (
     <div style={{ background: "#fbfbfc", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
@@ -274,8 +445,10 @@ export default function Dashboard() {
         <div className="flex items-end justify-between flex-wrap gap-4 mb-6">
           <div>
             <div className="text-[11px] uppercase tracking-[0.14em] mb-2" style={{ color: MUTED }}>Review activity</div>
-            <h1 className="text-[34px] font-bold tracking-tight" style={{ color: INK }}>{BUSINESS.name}</h1>
-            <div className="text-[13px] mt-1" style={{ color: MUTED }}>{BUSINESS.address} · Live since {BUSINESS.live}</div>
+            <h1 className="text-[34px] font-bold tracking-tight" style={{ color: INK }}>{business.name}</h1>
+            <div className="text-[13px] mt-1" style={{ color: MUTED }}>
+              Live since {new Date(business.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            </div>
           </div>
 
           <div className="relative" ref={wrapRef}>
@@ -299,16 +472,16 @@ export default function Dashboard() {
                 {custom && <X size={12} onClick={(e) => { e.stopPropagation(); setCustom(null); }} />}
               </button>
             </div>
-            {showCal && <RangePicker onClose={() => setShowCal(false)}
+            {showCal && <RangePicker today={today} onClose={() => setShowCal(false)}
               onApply={(s, e) => { setCustom([s, e]); setShowCal(false); }} />}
           </div>
         </div>
 
         <Panel className="flex flex-wrap divide-x mb-3">
           <Metric label="Taps" value={tapsInRange.toLocaleString()} delta={tapDelta} sub={`${label.toLowerCase()} · ${(tapsInRange / days).toFixed(1)}/day`} />
-          <Metric label="Google reviews" value={revEnd} sub={`${revStart} at start of period`} />
+          <Metric label="Google reviews" value={revEnd ?? "—"} sub={revStart != null ? `${revStart} at start of period` : "no snapshots yet"} />
           <Metric label="Reviews gained" value={`+${revGained}`} delta={revDelta} sub={label.toLowerCase()} />
-          <Metric label="Star rating" value={BUSINESS.rating} sub="Google average" />
+          <Metric label="Star rating" value={business.current_rating ?? "—"} sub="Google average" />
         </Panel>
 
         <Panel className="p-6 mb-3">
@@ -327,7 +500,7 @@ export default function Dashboard() {
               <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
               <Tooltip content={<Tip />} cursor={{ fill: "#f7f8fa" }} />
               <Bar yAxisId="l" dataKey="taps" name="Taps" fill={SOFT} radius={[3, 3, 0, 0]} maxBarSize={18} />
-              <Line yAxisId="r" dataKey="reviews" name="Total reviews" stroke={ACCENT} strokeWidth={2} dot={false} />
+              <Line yAxisId="r" dataKey="reviews" name="Total reviews" stroke={ACCENT} strokeWidth={2} dot={false} connectNulls />
             </ComposedChart>
           </ResponsiveContainer>
           <div className="mt-5 pt-4 border-t text-[12px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>
@@ -337,19 +510,25 @@ export default function Dashboard() {
         </Panel>
 
         <Panel className="mb-3 overflow-hidden">
-          <div className="px-6 pt-6"><Title sub={`${CARDS.length} cards placed · open a row for its own chart`}>By card</Title></div>
-          {CARDS.map((c) => {
-            const cardTaps = data.reduce((s, d) => s + d[c.id], 0);
+          <div className="px-6 pt-6"><Title sub={cards.length ? `${cards.length} cards placed · open a row for its own chart` : "No cards placed yet"}>By card</Title></div>
+          {cards.map((c) => {
+            const cardTaps = cardTapsInRange(c.id);
             const share = Math.round((cardTaps / Math.max(1, tapsInRange)) * 100);
             const open = openCard === c.id;
+            const byWeekday = WEEKDAYS.map((name, i) => ({
+              name, taps: data.filter((d) => d.d.getDay() === i).reduce((s, d) => s + (d[c.id] ?? 0), 0),
+            }));
+            const busiestDay = byWeekday.some((w) => w.taps > 0)
+              ? [...byWeekday].sort((a, b) => b.taps - a.taps)[0].name
+              : null;
             return (
               <div key={c.id} style={{ borderTop: `1px solid ${LINE}` }}>
                 <button onClick={() => setOpenCard(open ? null : c.id)}
                   className="w-full px-6 py-4 flex items-center gap-4 hover:bg-[#fafbfc] transition text-left">
                   <ChevronRight size={15} style={{ color: MUTED, transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-[14px] font-semibold" style={{ color: INK }}>{c.label}</div>
-                    <div className="text-[12px] capitalize" style={{ color: MUTED }}>{c.type} · last tap {c.lastTap}</div>
+                    <div className="text-[14px] font-semibold" style={{ color: INK }}>{c.label || "Untitled card"}</div>
+                    <div className="text-[12px] capitalize" style={{ color: MUTED }}>{c.card_type}</div>
                   </div>
                   <div className="hidden sm:block w-28">
                     <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
@@ -373,9 +552,9 @@ export default function Dashboard() {
                       </BarChart>
                     </ResponsiveContainer>
                     <div className="mt-4 flex flex-wrap gap-6 text-[12px]" style={{ color: MUTED }}>
-                      <span>Link: <code className="px-1.5 py-0.5 rounded" style={{ background: "#f2f3f6", color: INK }}>tap2review.com/r/{c.slug}</code></span>
-                      <span>Status: <span style={{ color: "#1a7f4b" }}>● Active</span></span>
-                      <span>Busiest day: Saturday</span>
+                      <span>Link: <code className="px-1.5 py-0.5 rounded" style={{ background: "#f2f3f6", color: INK }}>{REDIRECT_BASE.replace("https://", "")}/{c.slug}</code></span>
+                      <span>Status: <span style={{ color: c.active ? "#1a7f4b" : "#c0392b" }}>{c.active ? "● Active" : "○ Inactive"}</span></span>
+                      {busiestDay && <span>Busiest day: {busiestDay}</span>}
                     </div>
                   </div>
                 )}
@@ -390,15 +569,17 @@ export default function Dashboard() {
               <Smartphone size={14} style={{ color: MUTED }} />
               <Title sub="Device type only — no personal information is collected">Phones used</Title>
             </div>
-            {DEVICES.map((d, i) => (
-              <div key={d.name} className="flex items-center gap-3 mb-3">
-                <div className="w-16 text-[13px]" style={{ color: INK }}>{d.name}</div>
-                <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
-                  <div className="h-full rounded-full" style={{ width: `${d.value}%`, background: ACCENT, opacity: 1 - i * 0.28 }} />
+            {tapsInRange === 0
+              ? <div className="text-[13px]" style={{ color: MUTED }}>No taps in this period yet.</div>
+              : DEVICES.map((d, i) => (
+                <div key={d.name} className="flex items-center gap-3 mb-3">
+                  <div className="w-16 text-[13px]" style={{ color: INK }}>{d.name}</div>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
+                    <div className="h-full rounded-full" style={{ width: `${d.value}%`, background: ACCENT, opacity: 1 - i * 0.28 }} />
+                  </div>
+                  <div className="w-10 text-right text-[13px] tabular-nums font-medium" style={{ color: MUTED }}>{d.value}%</div>
                 </div>
-                <div className="w-10 text-right text-[13px] tabular-nums font-medium" style={{ color: MUTED }}>{d.value}%</div>
-              </div>
-            ))}
+              ))}
           </Panel>
 
           <Panel className="p-6">
@@ -410,7 +591,7 @@ export default function Dashboard() {
                 <YAxis tick={{ fontSize: 10, fill: MUTED }} axisLine={false} tickLine={false} />
                 <Tooltip content={<Tip />} cursor={{ fill: "#f7f8fa" }} />
                 <Bar dataKey="v" name="Taps" radius={[2, 2, 0, 0]}>
-                  {HOURS.map((h, i) => <Cell key={i} fill={h.v > 35 ? ACCENT : SOFT} />)}
+                  {HOURS.map((h, i) => <Cell key={i} fill={h.v > 0 && h.v === peakHour ? ACCENT : SOFT} />)}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -422,35 +603,41 @@ export default function Dashboard() {
             <Trophy size={14} style={{ color: MUTED }} />
             <Title sub="Tracked daily from public Google listings">How you stack up nearby</Title>
           </div>
-          <div className="space-y-1">
-            {[{ name: BUSINESS.name, reviews: revEnd, rating: BUSINESS.rating, gained30: Math.round(velocity), you: true }, ...COMPETITORS]
-              .sort((a, b) => b.reviews - a.reviews)
-              .map((c) => {
-                const max = Math.max(revEnd, ...COMPETITORS.map((x) => x.reviews));
-                return (
-                  <div key={c.name} className="flex items-center gap-4 py-2.5 px-3 rounded-lg"
-                       style={{ background: c.you ? "#f5f8ff" : "transparent" }}>
-                    <div className="w-40 shrink-0 text-[13px] truncate" style={{ color: INK, fontWeight: c.you ? 700 : 400 }}>
-                      {c.name}
-                      {c.you && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded align-middle" style={{ background: ACCENT, color: "#fff" }}>YOU</span>}
-                    </div>
-                    <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
-                      <div className="h-full rounded-full" style={{ width: `${(c.reviews / max) * 100}%`, background: c.you ? ACCENT : "#d4d7de" }} />
-                    </div>
-                    <div className="w-12 text-right text-[15px] font-bold tabular-nums" style={{ color: INK }}>{c.reviews}</div>
-                    <div className="w-10 text-right text-[12px] tabular-nums" style={{ color: MUTED }}>★{c.rating}</div>
-                    <div className="w-20 text-right text-[12px] tabular-nums" style={{ color: c.you ? "#1a7f4b" : MUTED }}>
-                      +{c.gained30}/mo
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-          <div className="mt-4 pt-4 border-t text-[12px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>
-            You're gaining <strong style={{ color: INK }}>{velocity.toFixed(1)} reviews a month</strong> versus{" "}
-            {COMPETITORS[0].velocity}/mo for {COMPETITORS[0].name}.{" "}
-            {ahead === 0 ? "You lead the neighborhood." : `${ahead} nearby ${ahead === 1 ? "business is" : "businesses are"} still ahead on total reviews.`}
-          </div>
+          {competitors.length === 0 ? (
+            <div className="text-[13px]" style={{ color: MUTED }}>No competitors tracked yet — add one from admin.html.</div>
+          ) : (
+            <>
+              <div className="space-y-1">
+                {[{ name: business.name, reviews: revEnd ?? 0, rating: business.current_rating, gained30: Math.round(velocity), you: true }, ...competitors]
+                  .sort((a, b) => b.reviews - a.reviews)
+                  .map((c) => {
+                    const max = Math.max(revEnd ?? 0, ...competitors.map((x) => x.reviews));
+                    return (
+                      <div key={c.name} className="flex items-center gap-4 py-2.5 px-3 rounded-lg"
+                           style={{ background: c.you ? "#f5f8ff" : "transparent" }}>
+                        <div className="w-40 shrink-0 text-[13px] truncate" style={{ color: INK, fontWeight: c.you ? 700 : 400 }}>
+                          {c.name}
+                          {c.you && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded align-middle" style={{ background: ACCENT, color: "#fff" }}>YOU</span>}
+                        </div>
+                        <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
+                          <div className="h-full rounded-full" style={{ width: `${max ? (c.reviews / max) * 100 : 0}%`, background: c.you ? ACCENT : "#d4d7de" }} />
+                        </div>
+                        <div className="w-12 text-right text-[15px] font-bold tabular-nums" style={{ color: INK }}>{c.reviews}</div>
+                        <div className="w-10 text-right text-[12px] tabular-nums" style={{ color: MUTED }}>{c.rating != null ? `★${c.rating}` : "—"}</div>
+                        <div className="w-20 text-right text-[12px] tabular-nums" style={{ color: c.you ? "#1a7f4b" : MUTED }}>
+                          +{c.gained30}/mo
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+              <div className="mt-4 pt-4 border-t text-[12px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>
+                You're gaining <strong style={{ color: INK }}>{velocity.toFixed(1)} reviews a month</strong> versus{" "}
+                {topCompetitor.velocity}/mo for {topCompetitor.name}.{" "}
+                {ahead === 0 ? "You lead the neighborhood." : `${ahead} nearby ${ahead === 1 ? "business is" : "businesses are"} still ahead on total reviews.`}
+              </div>
+            </>
+          )}
         </Panel>
 
         <Panel className="p-6">
