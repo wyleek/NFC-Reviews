@@ -37,7 +37,8 @@
   .stats b{color:var(--ink);font-size:14px}
   .cardrow{display:flex;gap:8px;margin-bottom:8px;align-items:center}
   .cardrow input{flex:1}
-  .cardrow select{width:110px}
+  .cardrow select{width:100px}
+  .cardrow input.price{flex:none;width:72px}
   .del{padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--muted);cursor:pointer}
   .link{background:#f7f8fa;border-radius:9px;padding:11px;font-size:12px;
     font-family:ui-monospace,monospace;word-break:break-all;margin:8px 0}
@@ -48,12 +49,6 @@
   .warn{background:#fff8e6;border:1px solid #f0dfae;border-radius:11px;padding:13px;
     font-size:13px;line-height:1.5;margin-bottom:12px}
   .note{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
-  .pk{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:16px}
-  .pk button{padding:11px 6px;border:1px solid var(--line);border-radius:10px;background:#fff;
-    cursor:pointer;text-align:left;font-family:inherit}
-  .pk button.on{border-color:var(--accent);background:#f5f8ff}
-  .pk .p1{font-size:13px;font-weight:600}
-  .pk .p2{font-size:12px;color:var(--muted)}
   .step{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}
   .checklist div{font-size:13px;color:var(--muted);padding:5px 0;display:flex;gap:9px;line-height:1.45}
   .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);margin-top:7px;flex-shrink:0}
@@ -65,7 +60,10 @@
 
 <header>
   <span class="brand">Tap2Review</span>
-  <button class="btn ghost sm" onclick="resetAll()">New</button>
+  <div style="display:flex;gap:8px">
+    <button class="btn ghost sm" onclick="S.view='setup';render()">Settings</button>
+    <button class="btn ghost sm" onclick="resetAll()">New</button>
+  </div>
 </header>
 
 <div class="wrap" id="app"></div>
@@ -103,24 +101,28 @@ async function api(action, payload = {}) {
 const NFC_OK = ('NDEFReader' in window);
 
 /* ------------------------------------------------------------------ state */
+const DEFAULT_CARDS = () => [
+  {label:'Front counter',type:'stand',price:''},
+  {label:'Table 1',type:'placard',price:''},
+  {label:'Table 2',type:'placard',price:''}
+];
+
 let S = {
   view: CFG.ok() ? 'search' : 'setup',
   query: '', hits: [], picked: null,
   contact: { name:'', title:'', email:'', phone:'' },
-  pkg: '3-pack', amount: 105,
-  cards: [ {label:'Front counter',type:'stand'}, {label:'Table 1',type:'placard'}, {label:'Table 2',type:'placard'} ],
+  cards: DEFAULT_CARDS(),
   created: null, busy: false, err: ''
 };
-const PACKS = [
-  {name:'Single',qty:1,amount:49},{name:'2-pack',qty:2,amount:80},
-  {name:'3-pack',qty:3,amount:105},{name:'5-pack',qty:5,amount:125}
-];
+
+function subtotal(){
+  return S.cards.reduce((sum,c)=> sum + (parseFloat(c.price) || 0), 0);
+}
 
 function resetAll(){
   S = {...S, view:'search', query:'', hits:[], picked:null,
        contact:{name:'',title:'',email:'',phone:''},
-       cards:[{label:'Front counter',type:'stand'},{label:'Table 1',type:'placard'},{label:'Table 2',type:'placard'}],
-       pkg:'3-pack', amount:105, created:null, err:''};
+       cards: DEFAULT_CARDS(), created: null, err:''};
   render();
 }
 
@@ -233,39 +235,30 @@ function vDetails(){ return `
 
   <div class="card">
     <div class="step">Step 3</div>
-    <h2>Package and cards</h2>
-    <div class="pk">
-      ${PACKS.map(p=>`<button class="${S.pkg===p.name?'on':''}" onclick="pickPack('${p.name}')">
-        <div class="p1">${p.name}</div><div class="p2">$${p.amount}</div></button>`).join('')}
-    </div>
+    <h2>Cards</h2>
+    <p class="sub">Name each card, pick its type, and set its own price — whatever you're actually charging for it.</p>
     ${S.cards.map((c,i)=>`
       <div class="cardrow">
         <input value="${c.label}" oninput="S.cards[${i}].label=this.value" placeholder="Where it goes">
         <select onchange="S.cards[${i}].type=this.value">
           ${['stand','placard','badge','card'].map(t=>`<option ${c.type===t?'selected':''}>${t}</option>`).join('')}
         </select>
+        <input class="price" type="number" min="0" step="0.01" inputmode="decimal"
+               value="${c.price}" oninput="S.cards[${i}].price=this.value;render()" placeholder="$">
         <button class="del" onclick="S.cards.splice(${i},1);render()">✕</button>
       </div>`).join('')}
-    <button class="btn ghost sm" onclick="S.cards.push({label:'',type:'placard'});render()">+ Add card</button>
+    <button class="btn ghost sm" onclick="S.cards.push({label:'',type:'placard',price:''});render()">+ Add card</button>
   </div>
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div><div class="p2" style="font-size:13px;color:var(--muted)">Collect</div>
-      <div style="font-size:26px;font-weight:700">$${S.amount}</div></div>
+      <div style="font-size:26px;font-weight:700">$${subtotal().toFixed(2)}</div></div>
     </div>
     <button class="btn" onclick="doCreate()" ${S.busy?'disabled':''}>
       ${S.busy?'Creating…':'Create and get links'}</button>
     ${S.err?`<div class="err">${S.err}</div>`:''}
   </div>`;
-}
-
-function pickPack(n){
-  const p = PACKS.find(x=>x.name===n);
-  S.pkg=n; S.amount=p.amount;
-  const labels=['Front counter','Table 1','Table 2','Table 3','Table 4'];
-  S.cards = Array.from({length:p.qty},(_,i)=>S.cards[i]||{label:labels[i]||'',type:i?'placard':'stand'});
-  render();
 }
 
 function vTags(){
@@ -282,7 +275,7 @@ function vTags(){
       <div class="tagbox">
         <div class="lbl">${k.label}</div>
         <div class="ty">${k.card_type}</div>
-        <div class="link">https://${location.hostname==='localhost'?'tap2review.com':'tap2review.com'}/r/${k.slug}</div>
+        <div class="link">${k.url}</div>
         <div class="row">
           ${NFC_OK?`<button class="btn" onclick="writeTag('${k.url}',${i})">Write to card</button>`:''}
           <button class="btn ghost" onclick="copy('${k.url}',${i})">Copy link</button>

@@ -94,13 +94,26 @@ Deno.serve(async (req) => {
 
   // ---------------------------------------------------------------- create
   if (action === "create_business") {
-    const { data: biz, error } = await admin.from("businesses").insert({
+    // A business row for this place_id may already exist — e.g. a scraped
+    // lead (stage='scraped') that's now converting to a paying customer
+    // right here in the field. Reuse that row instead of erroring on the
+    // google_place_id unique constraint; this is the sale, so land on
+    // stage='customer' either way.
+    const { data: existing } = await admin
+      .from("businesses").select("id")
+      .eq("google_place_id", p.place_id).maybeSingle();
+
+    const bizFields = {
       name: p.name,
       google_place_id: p.place_id,
       current_review_count: p.review_count ?? null,
       current_rating: p.rating ?? null,
       reviews_synced_at: new Date().toISOString(),
-    }).select().single();
+      stage: "customer",
+    };
+    const { data: biz, error } = existing
+      ? await admin.from("businesses").update(bizFields).eq("id", existing.id).select().single()
+      : await admin.from("businesses").insert(bizFields).select().single();
     if (error) return json({ error: error.message }, 400);
 
     // Baseline snapshot — this is the "reviews when you started" number.
