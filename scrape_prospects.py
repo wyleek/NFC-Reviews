@@ -6,11 +6,16 @@ Scrapes a hex grid of Nearby Search calls over a bounding box or a
 corridor (a list of points forming a route), dedupes by place_id, and
 writes to Supabase in two layers:
 
-    prospects      - durable  (place_id + your own classification)
-    places_cache   - ephemeral (Google content, 30-day TTL)
-    rating_observations - ephemeral (for velocity)
+    businesses           - durable  (one master record per business;
+                            upserted with stage='scraped' on first
+                            sight, via the upsert_scraped_businesses
+                            RPC — a re-scrape never regresses stage
+                            or clobbers a name you've since edited)
+    places_lookup_cache  - ephemeral (Google content, 30-day TTL)
 
-Run the SAME corridor again in ~21 days to generate review velocity.
+Run the SAME corridor again in ~21 days to generate review velocity
+(once something downstream reads two places_lookup_cache pulls —
+scoring/velocity itself is out of scope for this script).
 
 Usage:
     export GOOGLE_MAPS_API_KEY=...
@@ -37,6 +42,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -306,20 +312,39 @@ def write_supabase(rows, corridor, url, key):
     from supabase import create_client
     sb = create_client(url, key)
 
-    # NOTE: don't send now() as a value — the client serialises it to
-    # JSON and PostgREST stores the literal string "now()", which fails
-    # on a timestamptz column. Let the column DEFAULT now() fire instead.
-    sb.table("prospects").upsert([
-        {"place_id": r["place_id"],
-         "category_group": category_group(r["primary_type"]),
-         "corridor": corridor}
-        for r in rows
-    ], on_conflict="place_id", ignore_duplicates=False).execute()
+    # Durable layer: one master record per business. This never writes
+    # `place_id`/prospects directly — it calls the upsert_scraped_businesses
+    # RPC (supabase/migrations/20260817120000_crm_data_model.sql), which
+    # inserts new businesses at stage='scraped' and, on a re-scrape, only
+    # refreshes bookkeeping columns. It will not regress a business past
+    # 'scraped' or overwrite a name you've since edited by hand.
+    sb.rpc("upsert_scraped_businesses", {
+        "rows": [
+            {"google_place_id": r["place_id"],
+             "name": r["display_name"],
+             "category_group": category_group(r["primary_type"]),
+             "corridor": corridor}
+            for r in rows
+        ]
+    }).execute()
 
-    # send plain lat/lng floats; `location` is a generated column derived
-    # from them in SQL. opening_hours goes in as jsonb.
-    sb.table("places_cache").upsert([
-        {"place_id":          r["place_id"],
+    # Ephemeral layer: Google Places content only, 30-day TTL, keyed on
+    # google_place_id — never joined into a permanent export past that
+    # window. Send plain lat/lng floats; `location` is a generated column
+    # derived from them in SQL. opening_hours goes in as jsonb.
+    #
+    # fetched_at/expires_at are sent explicitly (as real timestamps, not
+    # the literal string "now()") rather than left to the column
+    # DEFAULTs — on a re-scrape this is an UPDATE via ON CONFLICT, and
+    # column defaults only fire on INSERT. Without this the TTL clock
+    # would never actually reset on a revisited corridor.
+    fetched_at = datetime.now(timezone.utc)
+    expires_at = fetched_at + timedelta(days=30)
+
+    sb.table("places_lookup_cache").upsert([
+        {"google_place_id":   r["place_id"],
+         "fetched_at":        fetched_at.isoformat(),
+         "expires_at":        expires_at.isoformat(),
          "display_name":      r["display_name"],
          "formatted_address": r["formatted_address"],
          "lat":               r["lat"],
@@ -335,16 +360,7 @@ def write_supabase(rows, corridor, url, key):
          "photo_count":       r["photo_count"],
          "opening_hours":     r["opening_hours"]}
         for r in rows
-    ], on_conflict="place_id").execute()
-
-    sb.table("rating_observations").insert([
-        {"place_id": r["place_id"],
-         "rating": r["rating"],
-         "user_rating_count": r["user_rating_count"]}
-        for r in rows if r["rating"] is not None
-    ]).execute()
-
-    sb.rpc("refresh_tiers").execute()
+    ], on_conflict="google_place_id").execute()
 
 
 def write_csv(rows, path):
@@ -448,9 +464,13 @@ def main():
     if not (url and key):
         sys.exit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
     write_supabase(rows, args.corridor, url, key)
-    print("wrote      : supabase (prospects, places_cache, rating_observations)")
-    print("\nnext: select * from v_call_list where corridor = "
-          f"'{args.corridor}' order by score desc;")
+    print("wrote      : supabase (businesses stage='scraped', places_lookup_cache)")
+    print("\nnext: select b.id, b.name, b.category_group, "
+          "c.rating, c.user_rating_count, c.national_phone "
+          "from businesses b "
+          "join places_lookup_cache c using (google_place_id) "
+          f"where b.corridor = '{args.corridor}' "
+          "order by c.user_rating_count desc nulls last;")
 
 
 if __name__ == "__main__":

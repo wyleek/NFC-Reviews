@@ -1,56 +1,67 @@
-# Branch: feature/console-live-data
+# Branch: feature/crm-data-model
 
 ## Scope
-Deploy the Supabase backend and wire the analytics dashboard off sample data
-onto real queries. This is the foundation branch — no dependencies — and can
-land independently at any point per `docs/PLAN.md`.
+The schema merge that reconciles `crm-spec.md` and `lead-engine-spec.md`
+into one data model. No dependencies — this is foundational for the CRM
+side, and `feature/crm-pipeline-board` builds on top of it.
+
+## Background
+Per `docs/PLAN.md`'s conflict resolution: `lead-engine-spec.md` (and
+`scrape_prospects.py`) used a standalone `prospects` table keyed by Google
+`place_id`; `crm-spec.md` said not to build a parallel leads system and to
+extend `businesses` instead. Both specs also defined a `contacts` table with
+different columns. Resolved: **one master record per business** —
+`businesses` gains the `stage` enum from `crm-spec.md`; `prospects` is
+retired (a scraped lead becomes a `businesses` row with `stage='scraped'`
+from day one); `contacts` becomes a single `business_id`-based schema with
+the lead-engine's `dm_days`/`dm_window`/`source` fields folded in.
 
 ## Work
-- Deploy Supabase project (or point at existing one).
-- Run the core schema (from `tap2review-backend.zip`): `businesses`, `cards`,
-  `taps`, `review_snapshots`, `contacts`, `competitors`,
-  `competitor_snapshots`. Confirm RLS policies are enabled and correct.
-- Deploy the Edge Functions from `tap2review-backend.zip`: `redirect`, `hub`,
-  `sync-reviews`, `admin-api`.
-- Smoke-test `admin.html` and `linkmaker.html` against the deployed
-  `admin-api` function (create business/card, search place, add competitor).
-- Rewrite `tap2review-dashboard.jsx` to drop its hardcoded sample data and
-  query Supabase directly (taps, review snapshots, competitor snapshots) for
-  the views it currently renders.
+- Add `stage` enum to `businesses` per `crm-spec.md`.
+- Retire the standalone `prospects` table (root `schema.sql`'s
+  `prospects`/`places_cache`/`rating_observations`); migrate any existing
+  rows into `businesses` with `stage='scraped'`.
+- Unify `contacts` into a single business_id-based schema, folding in
+  `dm_days`, `dm_window`, and `source` from the lead-engine spec.
+- Add `activities`, `deals`, `scheduled_messages` tables per `crm-spec.md`.
+- Rewrite `scrape_prospects.py` to write into `businesses`/`contacts`
+  instead of the retired `prospects` schema.
+- Carry forward the rolling-window retention rule from `docs/PLAN.md` for
+  any Places-derived lead-scoring fields (rating, review count) on
+  scraped-but-unsold businesses.
 
 ## Key files
-- `tap2review-backend.zip` (schema + edge functions — unzip to inspect)
-- `tap2review-dashboard.jsx`
-- `admin.html`, `linkmaker.html`
+- `crm-spec.md`
+- `lead-engine-spec.md`
+- `schema.sql` (root — the lead-engine schema, to be retired/migrated)
+- `scrape_prospects.py`
 
 ## Acceptance checklist
-- [x] Supabase project has core schema applied, RLS confirmed on all tables
-- [x] All four Edge Functions deployed and reachable
-- [x] `admin.html` can create a business + card end-to-end against the live API
-- [x] `linkmaker.html` produces a working tap link that hits `redirect`
-- [x] `tap2review-dashboard.jsx` renders real data, no sample/mock arrays left
-- [x] `sync-reviews` runs on schedule and populates `review_snapshots`
+- [x] `businesses.stage` enum added and populated for existing rows
+- [x] `prospects`/`places_cache`/`rating_observations` retired, data migrated
+- [x] Single unified `contacts` schema (business_id-based), old dual schemas removed
+- [x] `activities`, `deals`, `scheduled_messages` tables created per crm-spec.md
+- [x] `scrape_prospects.py` writes to `businesses`/`contacts`, not `prospects`
+- [x] Places-derived scoring fields for scraped businesses follow the rolling-window rule
+
+All done in `supabase/migrations/20260817120000_crm_data_model.sql` +
+the `scrape_prospects.py` rewrite — see that migration file's header for
+the two judgment calls it makes beyond this brief's literal wording
+(`visits` folded into `activities`; `businesses` also absorbs
+`prospects`' non-crm-spec durable columns).
 
 ## Deploy notes
 
-Deployed to Supabase project **NFC Database** (`ehzwsqkrmxsfdfslxmpo`). See
-`supabase/README.md` for the live URLs, what secrets are set, and two
-correctness fixes made vs. the original `tap2review-backend.zip` (dropped
-tap-logging on `redirect`, dead tap-link URLs in `admin-api`) — that
-directory is now the source of truth; the zip is kept for history only.
+Rebased onto `main` (post-`console-live-data`) and applied to the live
+**NFC Database** Supabase project (`ehzwsqkrmxsfdfslxmpo`) — confirmed via
+`list_tables`: `businesses.stage` populated, unified `contacts`, and
+`activities`/`deals`/`scheduled_messages`/`places_lookup_cache` all present.
 
-`admin.html`/`linkmaker.html` needed no code changes — they already take the
-function URL + admin token via a setup screen (stored in `localStorage`,
-never hardcoded). Every `admin-api` action (`search_place`, `create_business`,
-`add_competitor`, `list_businesses`, `quick_link`) was smoke-tested end-to-end
-via direct HTTP calls replicating exactly what those pages send; the actual
-HTML/JS UI itself wasn't driven in a browser (none available in this
-environment) — worth a quick manual click-through before calling this branch
-fully closed.
-
-The dashboard has no per-business login yet (out of scope here — see
-`docs/PLAN.md`), so it resolves which business to show via `?business=<id>`
-in the URL, falling back to the most recently created business if omitted.
-RLS was opened to read-only `SELECT` for the `anon`/`authenticated` roles on
-the tables/views it queries; writes stay exclusively behind the service-role
-Edge Functions. Scope that down once dashboard auth exists.
+Two gaps for whoever picks up `feature/crm-pipeline-board`:
+- The 5 new tables have RLS **enabled but no policies** — currently
+  unreadable/unwritable except via service-role Edge Functions. Add
+  read policies for `anon`/`authenticated` (matching `console-live-data`'s
+  pattern) once the dashboard/board needs to query them.
+- `scrape_prospects.py`'s upsert path hasn't been exercised against the
+  live DB yet (no real scrape run against real Places data) — worth a
+  dry run before relying on it.
