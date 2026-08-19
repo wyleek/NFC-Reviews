@@ -58,18 +58,30 @@ exclusively behind the service-role Edge Functions. Scope this down (e.g. to a
 `sync-reviews`. See `migrations/20260818040000_schedule_daily_review_sync.sql`
 (secret redacted there — the live job already has it).
 
-## Places-data retention (30-day rolling window)
+## Places-data retention (30-day rolling window) — risk *reduction*, not compliance
 
-`review_snapshots` is populated from the Places API, and per `docs/PLAN.md`'s
-ToS reading, rating/review-count "must be requested live, not warehoused" —
-`place_id` is the only field cleared for indefinite storage. `daily-review-sync`
-(`migrations/20260818040000_schedule_daily_review_sync.sql`) is what actually
-does the deleting — `purge-old-review-snapshots`, scheduled daily at 08:41 UTC,
-drops any `review_snapshots` row older than 30 days. Verified live: seeded rows
-at -45/-31/-29/0 days, ran the purge function directly, confirmed only the
--29/0 rows survived. This is the fallback source for the dashboard's 7/30/60-day
-view until a business connects Google Business Profile (below) — GBP data is
-owner-authorized under different terms and isn't subject to this purge.
+`review_snapshots` is populated from the Places API. **Read the actual terms
+carefully before treating this as settled**: Google's [Maps Platform Service
+Specific Terms](https://cloud.google.com/maps-platform/terms/maps-service-terms)
+grant a 30-day caching allowance for **lat/lng only**. `place_id` may be
+cached indefinitely. Rating, review count, name, and phone aren't covered by
+any caching allowance at all — the terms say those must be requested live,
+full stop, no time window attached.
+
+So the 30-day purge here (`purge-old-review-snapshots`, scheduled daily at
+08:41 UTC via `migrations/20260818040000_schedule_daily_review_sync.sql`,
+verified live against seeded -45/-31/-29/0-day rows — only -29/0 survived)
+is **not** "the compliant version" of storing this data. It's a deliberate
+bridge: it avoids the specific pattern Google's enforcement actually seems to
+target (a permanent, ever-growing warehouse of scraped place data), but it's
+still, technically, daily-snapshotting fields the terms say shouldn't be
+stored. The practical risk isn't legal action — it's automated abuse
+detection suspending the whole Cloud project, which also runs the paying-
+customer-facing `redirect`/`sync-reviews` functions.
+
+This is a business-risk call, not a solved problem — treat it as a temporary
+bridge while GBP access (below) is in flight, not the permanent architecture,
+especially once this runs at scale across many businesses rather than one.
 `competitor_snapshots` retention is `feature/competitor-rolling-tracking`'s
 scope, not touched here.
 
@@ -94,14 +106,59 @@ that's done:
   note naming the actual data source. No dashboard changes needed once real
   data starts landing.
 
-**To finish this once access exists:**
-1. Request Business Profile API access from Google (console.cloud.google.com
-   → APIs & Services → the API isn't self-serve like Places; follow Google's
-   current application flow).
-2. Register an OAuth 2.0 client, add the `gbp-connect/callback` function URL
-   as an authorized redirect URI.
-3. `supabase secrets set GBP_CLIENT_ID=... GBP_CLIENT_SECRET=... GBP_REDIRECT_URI=https://ehzwsqkrmxsfdfslxmpo.functions.supabase.co/gbp-connect/callback`
-4. Connect a real test business, then verify against Google's current docs:
+### How to request access
+
+1. **Prerequisites**: an active Google Business Profile listing (yours or a
+   client's) verified 60+ days, a website linked from that listing, and an
+   email address that's an owner/manager on it — you have to apply from that
+   email. The 60+-day profile can belong to any one client you manage; it's a
+   one-time bona fides check, not a per-client requirement (see "Scaling to
+   many businesses" below).
+2. Create/select a project in [Cloud Console](https://console.developers.google.com/project),
+   find its **Project Number** on the Dashboard.
+3. Submit the **[GBP API contact form](https://support.google.com/business/contact/api_default)**,
+   selecting **"Application for Basic API Access."** A draft of what to put in
+   the free-text fields is in `supabase/gbp-api-application-draft.md`. There's
+   no instant approval — Google emails a decision. Check approval status via
+   the API's quota in Cloud Console: 0 QPM = not yet, 300 QPM = approved.
+4. Once approved, enable all eight Business Profile APIs in
+   [Cloud Console → API Library](https://console.cloud.google.com/apis/library):
+   Google My Business API, My Business Account Management API, My Business
+   Business Information API, My Business Notifications API, My Business
+   Verifications API, My Business Q&A API, My Business Place Actions API, My
+   Business Lodging API.
+5. Create an OAuth 2.0 client
+   ([Cloud Console → Credentials](https://console.developers.google.com/apis/credentials) →
+   Create credentials → OAuth client ID → Web application), with authorized
+   redirect URI `https://ehzwsqkrmxsfdfslxmpo.functions.supabase.co/gbp-connect/callback`.
+   Grab the Client ID and Client Secret.
+6. **OAuth consent screen verification** — separate from API access, and
+   easy to miss: `business.manage` is a Google-classified restricted scope.
+   Until your consent screen passes Google's verification (needs a privacy
+   policy + homepage, ~3-5 business days,
+   [details](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)),
+   every business owner sees an "unverified app" warning before they can
+   approve the connection. Not blocking, but the opposite of hands-off —
+   either get this done before rolling `gbp-connect` out broadly, or be ready
+   to walk early business owners through clicking past the warning.
+
+### Scaling to many businesses ("agency" shape)
+
+One API access approval + one Cloud project covers **unlimited** connected
+businesses — there's no per-client application. The GBP API access request
+(step 1 above) is a one-time, project-level approval; after that, each
+business connects independently via the OAuth flow already built in
+`gbp-connect` (owner clicks a link, logs into their own Google account on
+Google's own consent screen, approves — never sees a password, never touches
+anything you host). Google does have a separate GBP-native "organization
+account" / "location groups" feature for agencies bulk-managing locations
+through Google's own dashboard UI, but it's unrelated to this OAuth-based
+integration — safe to ignore.
+
+### Finish this once access exists
+
+1. `supabase secrets set GBP_CLIENT_ID=... GBP_CLIENT_SECRET=... GBP_REDIRECT_URI=https://ehzwsqkrmxsfdfslxmpo.functions.supabase.co/gbp-connect/callback`
+2. Connect a real test business, then verify against Google's current docs:
    - `gbp-connect/index.ts`'s account/location discovery calls
      (`mybusinessaccountmanagement`/`mybusinessbusinessinformation` v1) —
      confirm these are still the right endpoints and response shapes.
@@ -109,9 +166,9 @@ that's done:
      endpoint (`mybusiness.googleapis.com/v4/.../reviews`) and the
      `averageRating`/`totalReviewCount` fields it reads are still current;
      Google has reorganized this API surface more than once.
-5. Schedule `gbp-sync` the same way as `sync-reviews` (see migration above),
+3. Schedule `gbp-sync` the same way as `sync-reviews` (see migration above),
    guarded by the same `CRON_SECRET`.
-6. `gbp-connect`'s callback takes the first GBP account/location it finds —
+4. `gbp-connect`'s callback takes the first GBP account/location it finds —
    fine for a single-location owner, wrong for a multi-location one. Worth a
    picker UI once this can actually be tested against a multi-location
    account.
