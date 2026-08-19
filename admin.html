@@ -110,6 +110,7 @@ const DEFAULT_CARDS = () => [
 let S = {
   view: CFG.ok() ? 'search' : 'setup',
   query: '', hits: [], picked: null,
+  existing: null, // {business, cards} from lookup_business once a result is picked
   contact: { name:'', title:'', email:'', phone:'' },
   cards: DEFAULT_CARDS(),
   created: null, busy: false, err: ''
@@ -129,7 +130,7 @@ function updateSubtotal(){
 }
 
 function resetAll(){
-  S = {...S, view:'search', query:'', hits:[], picked:null,
+  S = {...S, view:'search', query:'', hits:[], picked:null, existing:null,
        contact:{name:'',title:'',email:'',phone:''},
        cards: DEFAULT_CARDS(), created: null, err:''};
   render();
@@ -142,6 +143,27 @@ async function doSearch(){
   try { S.hits = (await api('search_place',{query:S.query})).places; }
   catch(e){ S.err = e.message; }
   S.busy = false; render();
+}
+
+// Picking a result checks whether this business already has a real row —
+// e.g. a quick demo card already written via linkmaker.html, or a scraped
+// lead — so Step 3 can pre-fill with what actually exists instead of
+// offering blank cards that would duplicate an already-written tag.
+async function pickResult(i){
+  S.picked = S.hits[i];
+  S.existing = null;
+  S.cards = DEFAULT_CARDS();
+  render();
+  try {
+    const d = await api('lookup_business', { place_id: S.picked.place_id });
+    if (d.business) {
+      S.existing = d.business;
+      if (d.cards.length) {
+        S.cards = d.cards.map(c => ({ id: c.id, label: c.label, type: c.card_type, price: '' }));
+      }
+    }
+  } catch (e) { /* lookup is best-effort — silently fall back to blank cards */ }
+  render();
 }
 
 async function doCreate(){
@@ -214,7 +236,7 @@ function vSearch(){ return `
     ${S.err?`<div class="err">${S.err}</div>`:''}
     <div style="margin-top:14px">
       ${S.hits.map((h,i)=>`
-        <div class="hit ${S.picked&&S.picked.place_id===h.place_id?'on':''}" onclick="S.picked=S.hits[${i}];render()">
+        <div class="hit ${S.picked&&S.picked.place_id===h.place_id?'on':''}" onclick="pickResult(${i})">
           <div class="n">${h.name}</div>
           <div class="a">${h.address||''}</div>
           <div class="stats">
@@ -228,6 +250,9 @@ function vSearch(){ return `
 }
 
 function vDetails(){ return `
+  ${S.existing && S.existing.stage !== 'customer' ? `
+    <p class="note" style="margin:-4px 0 12px">Already in the system as a lead
+      (stage: ${S.existing.stage}) — creating cards below moves it to customer.</p>` : ''}
   <div class="card">
     <div class="step">Step 2</div>
     <h2>Who to reach</h2>
@@ -246,6 +271,11 @@ function vDetails(){ return `
     <div class="step">Step 3</div>
     <h2>Cards</h2>
     <p class="sub">Name each card, pick its type, and set its own price — whatever you're actually charging for it.</p>
+    ${S.cards.some(c=>c.id) ? `
+      <p class="note" style="margin-top:-8px;margin-bottom:14px">
+        Found ${S.cards.filter(c=>c.id).length} card${S.cards.filter(c=>c.id).length>1?'s':''} already made for this business
+        (e.g. a demo tag from Link Maker) — reusing ${S.cards.filter(c=>c.id).length>1?'them':'it'} below,
+        same URL that's already written.</p>` : ''}
     ${S.cards.map((c,i)=>`
       <div class="cardrow">
         <input value="${c.label}" oninput="S.cards[${i}].label=this.value" placeholder="Where it goes">

@@ -4,7 +4,8 @@
 //
 // Actions:
 //   search_place    { query }            → candidate businesses + place_id + review stats
-//   create_business { ...business, cards } → creates business + cards, returns tag URLs
+//   lookup_business { place_id }         → existing business + its cards, if any (find-before-create)
+//   create_business { ...business, cards } → creates/updates business + cards, returns tag URLs
 //   add_competitor  { business_id, place_id, name }
 //   list_businesses {}
 //
@@ -135,20 +136,58 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Cards carrying an `id` are ones already written and possibly tapped
+    // in the field (e.g. a demo tag made via linkmaker's quick_link that
+    // closed the sale) — update that row in place so its slug, and
+    // therefore the URL already physically on the tag, never changes.
+    // Cards with no `id` are genuinely new and get inserted.
     const base = slugify(p.name);
-    const rows = (p.cards ?? []).map((c: any) => ({
+    const toUpdate = (p.cards ?? []).filter((c: any) => c.id);
+    const toInsert = (p.cards ?? []).filter((c: any) => !c.id).map((c: any) => ({
       business_id: biz.id,
       slug: `${base}-${slugify(c.label) || "card"}-${rand()}`,
       label: c.label,
       card_type: c.type ?? "stand",
       destination: "google",
     }));
-    const { data: cards, error: cErr } = await admin.from("cards").insert(rows).select();
+
+    const updated: any[] = [];
+    for (const c of toUpdate) {
+      const { data, error: uErr } = await admin.from("cards")
+        .update({ label: c.label, card_type: c.type ?? "stand" })
+        .eq("id", c.id).select().single();
+      if (uErr) return json({ error: uErr.message }, 400);
+      updated.push(data);
+    }
+    const { data: inserted, error: cErr } = toInsert.length
+      ? await admin.from("cards").insert(toInsert).select()
+      : { data: [], error: null };
     if (cErr) return json({ error: cErr.message }, 400);
 
     return json({
       business: biz,
-      cards: cards.map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
+      cards: [...updated, ...(inserted ?? [])].map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
+    });
+  }
+
+  // --------------------------------------------------------- lookup_business
+  // Called the moment admin.html's user picks a search result, before they've
+  // created anything — so if this business already has a row (e.g. a scraped
+  // lead, or one linkmaker already made a quick demo card for), Step 3 can
+  // pre-fill with its real existing card(s) instead of offering fresh blanks
+  // that would duplicate whatever's already been physically written.
+  if (action === "lookup_business") {
+    const { data: biz } = await admin
+      .from("businesses").select("id, name, stage")
+      .eq("google_place_id", p.place_id).maybeSingle();
+    if (!biz) return json({ business: null, cards: [] });
+
+    const { data: cards } = await admin
+      .from("cards").select("id, label, card_type, slug")
+      .eq("business_id", biz.id).order("created_at");
+    return json({
+      business: biz,
+      cards: (cards ?? []).map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
     });
   }
 
