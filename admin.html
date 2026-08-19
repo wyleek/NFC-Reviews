@@ -119,6 +119,15 @@ function subtotal(){
   return S.cards.reduce((sum,c)=> sum + (parseFloat(c.price) || 0), 0);
 }
 
+// Called on every price keystroke instead of a full render() — a full
+// render() replaces the whole app's innerHTML, which destroys and
+// recreates the input you're actively typing in (killing focus/cursor
+// and jumping the page). Just patch the one number that actually changed.
+function updateSubtotal(){
+  const el = document.getElementById('collectTotal');
+  if (el) el.textContent = '$' + subtotal().toFixed(2);
+}
+
 function resetAll(){
   S = {...S, view:'search', query:'', hits:[], picked:null,
        contact:{name:'',title:'',email:'',phone:''},
@@ -243,8 +252,8 @@ function vDetails(){ return `
         <select onchange="S.cards[${i}].type=this.value">
           ${['stand','placard','badge','card'].map(t=>`<option ${c.type===t?'selected':''}>${t}</option>`).join('')}
         </select>
-        <input class="price" type="number" min="0" step="0.01" inputmode="decimal"
-               value="${c.price}" oninput="S.cards[${i}].price=this.value;render()" placeholder="$">
+        <input class="price" type="text" inputmode="decimal"
+               value="${c.price}" oninput="S.cards[${i}].price=this.value;updateSubtotal()" placeholder="$">
         <button class="del" onclick="S.cards.splice(${i},1);render()">✕</button>
       </div>`).join('')}
     <button class="btn ghost sm" onclick="S.cards.push({label:'',type:'placard',price:''});render()">+ Add card</button>
@@ -253,7 +262,7 @@ function vDetails(){ return `
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div><div class="p2" style="font-size:13px;color:var(--muted)">Collect</div>
-      <div style="font-size:26px;font-weight:700">$${subtotal().toFixed(2)}</div></div>
+      <div id="collectTotal" style="font-size:26px;font-weight:700">$${subtotal().toFixed(2)}</div></div>
     </div>
     <button class="btn" onclick="doCreate()" ${S.busy?'disabled':''}>
       ${S.busy?'Creating…':'Create and get links'}</button>
