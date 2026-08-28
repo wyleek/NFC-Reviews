@@ -1,0 +1,107 @@
+/* CRM tab styles — re-themed from board/src/index.css (dark, CSS custom
+   properties) to hub/src/theme.css's light palette (--ink/--accent/--muted/
+   --line/--bg). theme.css doesn't have kanban/drawer classes yet, so they
+   live here instead of reintroducing board/'s dark variables. Everything
+   below is scoped under .crm so it can't leak into the Admin/Clients tabs. */
+
+.crm{display:flex;flex-direction:column;min-height:calc(100vh - 130px)}
+
+/* Board / Call list / New leads sub-nav */
+.crm-nav{display:flex;gap:6px;padding:12px 18px 0}
+.crm-nav button{font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  border:1px solid var(--line);background:#fff;color:var(--muted);
+  border-radius:999px;padding:8px 14px}
+.crm-nav button.active{border-color:var(--accent);color:var(--accent);background:#f5f8ff}
+
+/* ---------- Board ---------- */
+.board{flex:1;display:flex;gap:12px;padding:14px 18px;overflow-x:auto}
+.board-status{padding:24px;color:var(--muted)}
+.board-status.error{color:var(--red)}
+
+.stage-column{flex:0 0 240px;background:#fff;border:1px solid var(--line);
+  border-radius:12px;display:flex;flex-direction:column;max-height:100%}
+.stage-column.drag-over{outline:2px solid var(--accent)}
+.stage-column-header{display:flex;justify-content:space-between;padding:10px 12px;
+  border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.stage-count{color:var(--muted)}
+.stage-column-body{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
+
+.biz-card{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  padding:10px;cursor:pointer}
+.biz-card:hover{border-color:var(--accent)}
+.biz-card-name{font-weight:600;margin-bottom:4px;font-size:14px}
+.biz-card-meta{display:flex;gap:6px;align-items:center;font-size:11px;
+  color:var(--muted);flex-wrap:wrap;margin-bottom:4px}
+.biz-card-footer{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+.biz-card-next{margin-top:6px;font-size:12px;color:var(--accent)}
+.stage-select{margin-top:8px;padding:5px 6px;font-size:12px}
+
+.pill{background:var(--line);border-radius:999px;padding:1px 8px;font-size:11px;
+  color:var(--ink);white-space:nowrap}
+
+/* ---------- Drawer ---------- */
+.drawer-backdrop{position:fixed;inset:0;background:rgba(18,20,26,.4);
+  display:flex;justify-content:flex-end;z-index:20}
+.drawer{width:min(420px,100%);background:#fff;height:100%;overflow-y:auto;
+  padding:20px;position:relative;border-left:1px solid var(--line)}
+.drawer-close{position:absolute;top:12px;right:12px;background:transparent;
+  border:0;color:var(--muted);font-size:22px;line-height:1;padding:4px 8px;cursor:pointer}
+.drawer h2{margin:0 0 4px;padding-right:30px}
+.drawer-stage-pill{display:inline-block;background:var(--bg);border:1px solid var(--line);
+  border-radius:999px;padding:2px 10px;font-size:12px;margin-bottom:16px}
+.drawer section{margin-bottom:20px}
+.drawer h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--muted);margin:0 0 8px}
+.empty{color:var(--muted);font-size:13px}
+
+.outcome-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.outcome-buttons button{font:inherit;font-weight:600;font-size:13px;cursor:pointer;
+  border:0;border-radius:9px;padding:10px 14px;color:#fff}
+.outcome-buttons button:disabled{opacity:.5;cursor:not-allowed}
+.outcome-error{color:var(--red);font-size:12px;margin:0 0 8px}
+.outcome-sale{background:var(--green)}
+.outcome-trial{background:var(--yellow)}
+.outcome-no{background:var(--red)}
+.outcome-reschedule{background:#5b5fc7}
+
+.consent-confirm{background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  padding:12px;font-size:13px}
+.consent-actions{display:flex;gap:8px;margin-top:10px}
+
+.voice-note textarea{width:100%;background:#fff;color:var(--ink);border:1px solid var(--line);
+  border-radius:10px;padding:10px;font:inherit;font-size:14px;resize:vertical}
+.voice-note-actions{display:flex;gap:8px;margin-top:8px}
+.mic-on{background:var(--red)!important;color:#fff}
+
+.contact-list,.deal-list,.activity-list{list-style:none;margin:0;padding:0;
+  display:flex;flex-direction:column;gap:8px}
+.contact-list li,.deal-list li{background:var(--bg);border-radius:9px;padding:8px 10px;font-size:13px}
+.activity-list li{background:var(--bg);border-radius:9px;padding:8px 10px}
+.activity-time{color:var(--muted);font-size:11px;margin-left:8px}
+.activity-body{margin-top:4px;font-size:13px}
+.status-won{background:var(--green);color:#fff}
+.status-lost{background:var(--red);color:#fff}
+.tier-a{background:var(--green);color:#fff}
+.tier-b{background:var(--accent);color:#fff}
+
+/* ---------- Call list (Call list + New leads share this) ---------- */
+.call-list{flex:1;overflow-y:auto;padding:14px 18px;max-width:720px;margin:0 auto;width:100%}
+.call-list-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.call-list-rows>li{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.call-list-rows>li.visited{opacity:.55}
+.call-row-main{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.call-row-name{font-weight:600;font-size:14px}
+.call-row-meta{display:flex;gap:6px;align-items:center;font-size:11px;
+  color:var(--muted);margin-top:4px;flex-wrap:wrap}
+.call-row-contact{margin-top:6px;font-size:12px;color:var(--muted)}
+.call-row-contact.empty{font-style:italic}
+
+.precall-form{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:10px}
+.precall-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600}
+.precall-days{display:flex;gap:6px;flex-wrap:wrap}
+.precall-days button{font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  border-radius:8px;padding:6px 10px}
+.day-off{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.day-on{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.precall-actions{display:flex;gap:8px}
