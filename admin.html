@@ -73,12 +73,26 @@
 /* ------------------------------------------------------------------ config
    Stored on the device once, in localStorage. Never hard-code these.
 ------------------------------------------------------------------ */
+// Default points at the live deploy (Vercel) — override in Settings if you
+// ever move it to a custom domain, no code change needed.
+const DEFAULT_DASHBOARD_URL = 'https://dashboard-app-omega-beige.vercel.app';
+
 const CFG = {
   get fnUrl(){ return localStorage.getItem('t2r_fn') || '' },
   get token(){ return localStorage.getItem('t2r_token') || '' },
-  set(fn, tok){ localStorage.setItem('t2r_fn', fn); localStorage.setItem('t2r_token', tok); },
+  get dashUrl(){ return localStorage.getItem('t2r_dash') || DEFAULT_DASHBOARD_URL },
+  set(fn, tok, dash){
+    localStorage.setItem('t2r_fn', fn); localStorage.setItem('t2r_token', tok);
+    localStorage.setItem('t2r_dash', dash || DEFAULT_DASHBOARD_URL);
+  },
   ok(){ return this.fnUrl && this.token }
 };
+
+// The link a client just clicks — no UUID typing, ever. Built the moment
+// a business exists, same as the tap-card URLs the backend hands back.
+function dashboardUrl(businessId){
+  return `${CFG.dashUrl.replace(/\/$/, '')}/?business=${businessId}`;
+}
 
 async function api(action, payload = {}) {
   if (!CFG.fnUrl) throw new Error('No function URL set. Add it in one-time setup.');
@@ -225,6 +239,12 @@ function copy(url,i){
   el.innerHTML = '<span class="ok">✓ Copied — paste into NFC Tools › Write › URL</span>';
 }
 
+function copyDash(url){
+  navigator.clipboard.writeText(url);
+  const el = document.getElementById('stdash');
+  el.innerHTML = '<span class="ok">✓ Copied — ready to text or email</span>';
+}
+
 /* ------------------------------------------------------------------ views */
 function render(){
   const a = document.getElementById('app');
@@ -243,7 +263,9 @@ function vSetup(){ return `
       <input id="fn" placeholder="https://xxxx.functions.supabase.co/admin-api" value="${CFG.fnUrl}"></div>
     <div class="field"><label>Admin token</label>
       <input id="tk" placeholder="your ADMIN_TOKEN" value="${CFG.token}"></div>
-    <button class="btn" onclick="CFG.set(fn.value.trim(),tk.value.trim());S.view='search';render()">Save</button>
+    <div class="field"><label>Dashboard URL</label>
+      <input id="dash" placeholder="https://your-dashboard.vercel.app" value="${CFG.dashUrl}"></div>
+    <button class="btn" onclick="CFG.set(fn.value.trim(),tk.value.trim(),dash.value.trim());S.view='search';render()">Save</button>
     <p class="note">${NFC_OK
       ? 'NFC writing is available on this device — you can program cards right here.'
       : 'This device can’t write NFC from the browser (iPhones don’t support it). You’ll get copy buttons to paste into the NFC Tools app instead.'}</p>
@@ -347,7 +369,16 @@ function vDetails(){ return `
 
 function vTags(){
   const c = S.created;
+  const dashUrl = dashboardUrl(c.business.id);
   return `
+  <div class="card">
+    <h2>${c.business.name}'s dashboard</h2>
+    <p class="sub">Text or email this link — it opens straight to their numbers, no login or ID to type.</p>
+    <div class="link">${dashUrl}</div>
+    <button class="btn ghost" onclick="copyDash('${dashUrl}')">Copy link</button>
+    <div class="note" id="stdash"></div>
+  </div>
+
   <div class="card">
     <h2>${c.business.name} is set up</h2>
     <p class="sub">${NFC_OK
@@ -375,7 +406,7 @@ function vTags(){
          'Place the stand where customers pay',
          'Book the 30-day check-in now, on their calendar',
          'Coach staff: ask every customer honestly, never request 5 stars',
-         'Send receipt and dashboard login to '+(S.contact.email||'their email')]
+         'Text or email the dashboard link above to '+(S.contact.email||S.contact.phone||'them')]
         .map(t=>`<div><span class="dot"></span>${t}</div>`).join('')}
     </div>
   </div>
