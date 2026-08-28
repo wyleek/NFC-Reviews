@@ -3,6 +3,7 @@ import { KanbanBoard } from "./crm/KanbanBoard";
 import { BusinessDrawer } from "./crm/BusinessDrawer";
 import { CallList } from "./crm/CallList";
 import { NewLeadsList } from "./crm/NewLeadsList";
+import { supabaseConfigured } from "../lib/supabaseClient";
 
 // Port of board/ (branch feature/crm-pipeline-board) into the hub — see
 // docs/BRANCH_BRIEF-hub-crm-tab.md. Same 9 components, same behavior;
@@ -22,6 +23,22 @@ export function CrmTab() {
   const [subtab, setSubtab] = useState("board");
   const [openBusinessId, setOpenBusinessId] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+
+  if (!supabaseConfigured) {
+    return (
+      <div className="wrap">
+        <div className="card">
+          <div className="step">CRM</div>
+          <h2>Supabase isn't configured</h2>
+          <p className="sub">
+            Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in{" "}
+            <code>hub/.env.local</code> (see <code>hub/.env.example</code>) and restart the dev
+            server or rebuild.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="crm">

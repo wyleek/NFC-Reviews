@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, supabaseConfigured } from "../lib/supabaseClient";
 import { dashboardUrl } from "../lib/config";
 
 // Same day-bucketing helpers as dashboard-app/src/Dashboard.jsx, kept local
@@ -43,6 +43,10 @@ export function ClientsTab() {
   const [state, setState] = useState({ loading: true, error: null, clients: [] });
 
   useEffect(() => {
+    if (!supabaseConfigured) {
+      setState({ loading: false, error: null, clients: [] });
+      return;
+    }
     let cancelled = false;
     (async () => {
       setState((s) => ({ ...s, loading: true, error: null }));
@@ -125,9 +129,18 @@ export function ClientsTab() {
         Worst health first — a slipping account shouldn't require opening its full dashboard to spot.
       </p>
 
+      {!supabaseConfigured && (
+        <div className="card">
+          <p className="sub" style={{ margin: 0 }}>
+            Supabase isn't configured — set <code>VITE_SUPABASE_URL</code> and{" "}
+            <code>VITE_SUPABASE_ANON_KEY</code> in <code>hub/.env.local</code> (see{" "}
+            <code>hub/.env.example</code>) and restart the dev server or rebuild.
+          </p>
+        </div>
+      )}
       {loading && <div className="card">Loading…</div>}
       {!loading && error && <div className="card err">{error}</div>}
-      {!loading && !error && clients.length === 0 && (
+      {supabaseConfigured && !loading && !error && clients.length === 0 && (
         <div className="card">
           <p className="sub" style={{ margin: 0 }}>
             No customers yet — businesses show up here once they close in the CRM.
