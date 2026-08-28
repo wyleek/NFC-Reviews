@@ -1,0 +1,72 @@
+/* Shared design system for the operator hub — ported from admin.html's
+   tested, working <style> block (light theme, chosen 2026-08-27 over
+   board/'s dark theme because it's the already-proven surface). Every
+   tab (Admin, CRM, Clients) builds on these same classes/variables
+   instead of carrying its own stylesheet forward. */
+
+:root{--ink:#12141a;--accent:#2f5eff;--muted:#8a8f9a;--line:#e8e9ed;--bg:#fbfbfc;
+  --green:#1a7f4b;--yellow:#a5760a;--red:#c0392b}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+
+.app{padding-bottom:76px} /* clears the fixed bottom tab bar */
+
+.app-header{background:#fff;border-bottom:1px solid var(--line);padding:14px 18px;
+  position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between}
+.brand{font-size:15px;font-weight:700;letter-spacing:-.01em}
+
+.wrap{max-width:560px;margin:0 auto;padding:20px 18px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:12px}
+h1,h2{letter-spacing:-.02em}
+h2{font-size:20px;margin:0 0 4px}
+.sub{font-size:13px;color:var(--muted);margin:0 0 18px}
+
+label{display:block;font-size:12px;font-weight:600;margin:0 0 6px}
+input,select{width:100%;padding:13px;font-size:16px;border:1px solid var(--line);
+  border-radius:10px;outline:none;background:#fff;font-family:inherit}
+input:focus,select:focus{border-color:var(--accent)}
+.field{margin-bottom:14px}
+.row{display:flex;gap:8px}
+
+.btn{width:100%;padding:15px;font-size:15px;font-weight:600;border:0;border-radius:11px;
+  background:var(--accent);color:#fff;cursor:pointer;font-family:inherit}
+.btn:disabled{opacity:.4}
+.btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.btn.sm{width:auto;padding:10px 14px;font-size:13px}
+
+.hit{border:1px solid var(--line);border-radius:11px;padding:13px;margin-bottom:8px;cursor:pointer;background:#fff}
+.hit:active{background:#f7f8fa}
+.hit.on{border-color:var(--accent);background:#f5f8ff}
+.hit .n{font-size:14px;font-weight:600}
+.hit .a{font-size:12px;color:var(--muted);margin-top:2px}
+.stats{display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--muted)}
+.stats b{color:var(--ink);font-size:14px}
+
+.link{background:#f7f8fa;border-radius:9px;padding:11px;font-size:12px;
+  font-family:ui-monospace,monospace;word-break:break-all;margin:8px 0}
+.ok{color:var(--green);font-weight:600}
+.err{color:var(--red);font-size:13px;margin-top:8px}
+.note{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
+.step{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}
+
+/* Health flag dots — Clients tab. Same three states everywhere it shows up. */
+.health-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.health-dot.green{background:var(--green)}
+.health-dot.yellow{background:var(--yellow)}
+.health-dot.red{background:var(--red)}
+
+/* Bottom tab bar — the thing that makes this feel like one app, not three */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:10;
+  background:#fff;border-top:1px solid var(--line);
+  display:flex;padding-bottom:env(safe-area-inset-bottom)}
+.tabbar button{flex:1;background:none;border:0;padding:10px 4px 8px;
+  font-family:inherit;font-size:11px;font-weight:600;color:var(--muted);cursor:pointer}
+.tabbar button .icon{display:block;font-size:20px;margin-bottom:2px}
+.tabbar button.active{color:var(--accent)}
+
+/* First-run settings gate — same idea as admin.html's token prompt */
+.settings-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.settings-form{max-width:400px;width:100%;background:#fff;border:1px solid var(--line);
+  border-radius:14px;padding:24px}
+.settings-form input{font-family:ui-monospace,monospace;font-size:13px;margin-bottom:12px}
