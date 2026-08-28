@@ -1,0 +1,12 @@
+{
+  "name": "Tap2Review",
+  "short_name": "Tap2Review",
+  "description": "Onboard businesses, run the CRM pipeline, and check client health — all in one place.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbfbfc",
+  "theme_color": "#2f5eff",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
