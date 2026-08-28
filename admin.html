@@ -111,6 +111,7 @@ let S = {
   view: CFG.ok() ? 'search' : 'setup',
   query: '', hits: [], picked: null,
   existing: null, // {business, cards} from lookup_business once a result is picked
+  quickLink: null, // {business, slug, url} from quick_link — the walk-in-the-door link
   contact: { name:'', title:'', email:'', phone:'' },
   cards: DEFAULT_CARDS(),
   created: null, busy: false, err: ''
@@ -130,7 +131,7 @@ function updateSubtotal(){
 }
 
 function resetAll(){
-  S = {...S, view:'search', query:'', hits:[], picked:null, existing:null,
+  S = {...S, view:'search', query:'', hits:[], picked:null, existing:null, quickLink:null,
        contact:{name:'',title:'',email:'',phone:''},
        cards: DEFAULT_CARDS(), created: null, err:''};
   render();
@@ -152,6 +153,7 @@ async function doSearch(){
 async function pickResult(i){
   S.picked = S.hits[i];
   S.existing = null;
+  S.quickLink = null;
   S.cards = DEFAULT_CARDS();
   render();
   try {
@@ -164,6 +166,32 @@ async function pickResult(i){
     }
   } catch (e) { /* lookup is best-effort — silently fall back to blank cards */ }
   render();
+}
+
+// The walk-in-the-door link: one working card, right now, before contact
+// info or pricing exist. Field flow is search -> pick -> this -> sell.
+// Reuses the same `businesses` row create_business would (find-or-create
+// by place_id, see quick_link in admin-api) so nothing gets duplicated —
+// then re-runs lookup_business so Step 3 picks up this exact card's `id`
+// and updates it in place later instead of minting a second one.
+async function getQuickLink(){
+  S.busy = true; S.err=''; render();
+  try {
+    const d = await api('quick_link', {
+      place_id: S.picked.place_id, name: S.picked.name,
+      review_count: S.picked.review_count, rating: S.picked.rating,
+      label: 'Stand', type: 'stand'
+    });
+    S.quickLink = d;
+    const look = await api('lookup_business', { place_id: S.picked.place_id });
+    if (look.business) {
+      S.existing = look.business;
+      if (look.cards.length) {
+        S.cards = look.cards.map(c => ({ id: c.id, label: c.label, type: c.card_type, price: '' }));
+      }
+    }
+  } catch(e){ S.err = e.message; }
+  S.busy = false; render();
 }
 
 async function doCreate(){
@@ -242,7 +270,7 @@ function vSearch(){ return `
           <div class="stats">
             <span><b>${h.review_count}</b> reviews</span>
             <span><b>${h.rating??'—'}</b> ★</span>
-            ${h.velocity_estimate?`<span>~<b>${h.velocity_estimate}</b>/mo</span>`:''}
+            ${h.velocity_estimate?`<span>~<b>${h.velocity_estimate}</b> reviews/mo (est.)</span>`:''}
           </div>
         </div>`).join('')}
     </div>
@@ -253,6 +281,23 @@ function vDetails(){ return `
   ${S.existing && S.existing.stage !== 'customer' ? `
     <p class="note" style="margin:-4px 0 12px">Already in the system as a lead
       (stage: ${S.existing.stage}) — creating cards below moves it to customer.</p>` : ''}
+  <div class="card">
+    <div class="step">Before you go in</div>
+    <h2>${S.quickLink ? 'Your working link' : 'Get one link now'}</h2>
+    ${S.quickLink ? `
+      <p class="sub">Walk in with this — write it to a card or copy it. It's already attached to
+        ${S.picked.name}; finishing the sale below reuses this exact card instead of making a new one.</p>
+      <div class="link">${S.quickLink.url}</div>
+      <div class="row">
+        ${NFC_OK?`<button class="btn" onclick="writeTag('${S.quickLink.url}','quick')">Write to card</button>`:''}
+        <button class="btn ghost" onclick="copy('${S.quickLink.url}','quick')">Copy link</button>
+      </div>
+      <div class="note" id="stquick"></div>` : `
+      <p class="sub">Skip contact info and pricing for now — get one working link you can hand over
+        or write to a card before you've made the sale.</p>
+      <button class="btn" onclick="getQuickLink()" ${S.busy?'disabled':''}>${S.busy?'…':'Get a link now'}</button>
+      ${S.err?`<div class="err">${S.err}</div>`:''}`}
+  </div>
   <div class="card">
     <div class="step">Step 2</div>
     <h2>Who to reach</h2>
