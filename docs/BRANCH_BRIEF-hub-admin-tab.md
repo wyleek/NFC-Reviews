@@ -47,11 +47,27 @@ state.
   `quick_link` / `create_business` (no changes expected here)
 
 ## Acceptance checklist
-- [ ] Search → pick a result → (optional) "Get a link now" → contact →
+- [x] Search → pick a result → (optional) "Get a link now" → contact →
       cards → create, all working against the real `admin-api`
-- [ ] Created business's cards each show their own tracked link + copy
+- [x] Created business's cards each show their own tracked link + copy
       button
-- [ ] Client dashboard link shown and copyable (PR #7 behavior)
-- [ ] A business created here shows up in the CRM tab without a page
-      reload
-- [ ] `npm run build` in `hub/` succeeds
+- [x] Client dashboard link shown and copyable (PR #7 behavior)
+- [x] A business created here shows up in the CRM tab without a page
+      reload (no local business-list caching added on this branch)
+- [x] `npm run build` in `hub/` succeeds
+
+## Notes for the reviewer
+- `admin.html` in this worktree didn't yet have the quick-link (PR #8,
+  `feature/quick-link-field-flow`) or dashboard-link-handoff (PR #7,
+  `feature/dashboard-link-handoff`) changes — they exist as separate
+  branches, not yet merged to `main`. Ported the behavior from both
+  branches' `admin.html` diffs since the brief describes them as already
+  shipped; `admin-api` already supports `quick_link` and returns
+  everything `dashboardUrl()` needs, so no backend changes either way.
+- `hub/src/lib/adminApi.js` is new — a thin `call(action, payload)`
+  wrapper matching `board/src/lib/adminApi.js`'s existing convention,
+  scoped to the four actions this tab uses.
+- Added a handful of classes to `theme.css` that `admin.html` has but the
+  shared stylesheet didn't yet (`.cardrow`, `.del`, `.tagbox`, `.warn`,
+  `.checklist`/`.dot`) — additive only, no existing rule changed, so
+  CRM/Clients are unaffected.

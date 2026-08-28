@@ -70,3 +70,19 @@ input:focus,select:focus{border-color:var(--accent)}
 .settings-form{max-width:400px;width:100%;background:#fff;border:1px solid var(--line);
   border-radius:14px;padding:24px}
 .settings-form input{font-family:ui-monospace,monospace;font-size:13px;margin-bottom:12px}
+
+/* Admin tab — Step 3's per-card row, and the finished tap-card list.
+   Ported from admin.html's <style> block (not covered by the classes
+   above yet); additive only, nothing here touches an existing rule. */
+.cardrow{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.cardrow input{flex:1}
+.cardrow select{width:100px}
+.cardrow input.price{flex:none;width:72px}
+.del{padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--muted);cursor:pointer}
+.tagbox{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;background:#fff}
+.tagbox .lbl{font-size:14px;font-weight:600;margin-bottom:2px}
+.tagbox .ty{font-size:12px;color:var(--muted);text-transform:capitalize}
+.warn{background:#fff8e6;border:1px solid #f0dfae;border-radius:11px;padding:13px;
+  font-size:13px;line-height:1.5;margin-bottom:12px}
+.checklist div{font-size:13px;color:var(--muted);padding:5px 0;display:flex;gap:9px;line-height:1.45}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--accent);margin-top:7px;flex-shrink:0}
