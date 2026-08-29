@@ -154,16 +154,20 @@ Deno.serve(async (req) => {
     // in the field (e.g. a demo tag made via linkmaker's quick_link that
     // closed the sale) — update that row in place so its slug, and
     // therefore the URL already physically on the tag, never changes.
-    // Cards with no `id` are genuinely new and get inserted.
+    // Cards with no `id` are meant to be genuinely new, but the client's
+    // "pre-fill existing cards from lookup_business" step (admin.html and
+    // hub's AdminTab.jsx both do this) is a client-side convenience, not
+    // something this endpoint can rely on — a stale/fresh client state
+    // (re-running the onboarding flow for a business that already has
+    // cards, from either admin.html or the hub, without that prefill
+    // landing) sends label-only cards again and this used to insert them
+    // unconditionally. Caught live: Yogamour ended up with 7 rows in
+    // `cards` for what should've been 4 distinct locations. Guard it
+    // server-side too — reuse an existing card for this business+label
+    // instead of minting a duplicate; only truly new labels get inserted.
     const base = slugify(p.name);
     const toUpdate = (p.cards ?? []).filter((c: any) => c.id);
-    const toInsert = (p.cards ?? []).filter((c: any) => !c.id).map((c: any) => ({
-      business_id: biz.id,
-      slug: `${base}-${slugify(c.label) || "card"}-${rand()}`,
-      label: c.label,
-      card_type: c.type ?? "stand",
-      destination: "google",
-    }));
+    const freshByLabel = (p.cards ?? []).filter((c: any) => !c.id);
 
     const updated: any[] = [];
     for (const c of toUpdate) {
@@ -173,6 +177,25 @@ Deno.serve(async (req) => {
       if (uErr) return json({ error: uErr.message }, 400);
       updated.push(data);
     }
+
+    const reused: any[] = [];
+    const toInsert: any[] = [];
+    for (const c of freshByLabel) {
+      const { data: existingCard } = await admin
+        .from("cards").select().eq("business_id", biz.id).eq("label", c.label)
+        .order("created_at").limit(1).maybeSingle();
+      if (existingCard) {
+        reused.push(existingCard);
+      } else {
+        toInsert.push({
+          business_id: biz.id,
+          slug: `${base}-${slugify(c.label) || "card"}-${rand()}`,
+          label: c.label,
+          card_type: c.type ?? "stand",
+          destination: "google",
+        });
+      }
+    }
     const { data: inserted, error: cErr } = toInsert.length
       ? await admin.from("cards").insert(toInsert).select()
       : { data: [], error: null };
@@ -180,7 +203,7 @@ Deno.serve(async (req) => {
 
     return json({
       business: biz,
-      cards: [...updated, ...(inserted ?? [])].map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
+      cards: [...updated, ...reused, ...(inserted ?? [])].map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
     });
   }
 
@@ -249,9 +272,26 @@ Deno.serve(async (req) => {
       }
     }
 
-    const slug = `${slugify(p.name)}-${slugify(p.label || "card")}-${rand()}`;
+    // "add ONE card" per the docstring above — but this used to insert a
+    // fresh card unconditionally on every call, with no find-or-reuse the
+    // way the business lookup above has. Every repeat visit to this flow
+    // for an already-quick-linked business (both admin.html and hub's
+    // AdminTab.jsx call this with the same hardcoded label, "Stand") minted
+    // another duplicate row. Caught live: Yogamour had 3 separate "Stand"
+    // cards from 3 separate quick_link calls weeks apart. Reuse the
+    // existing card for this business+label instead of duplicating it.
+    const label = p.label || "Card";
+    const { data: existingCard } = await admin
+      .from("cards").select("slug")
+      .eq("business_id", biz.id).eq("label", label)
+      .order("created_at").limit(1).maybeSingle();
+    if (existingCard) {
+      return json({ business: biz, slug: existingCard.slug, url: tapUrl(existingCard.slug) });
+    }
+
+    const slug = `${slugify(p.name)}-${slugify(label)}-${rand()}`;
     const { data: card, error: cErr } = await admin.from("cards").insert({
-      business_id: biz.id, slug, label: p.label || "Card",
+      business_id: biz.id, slug, label,
       card_type: p.type || "stand", destination: "google",
     }).select().single();
     if (cErr) return json({ error: cErr.message }, 400);
