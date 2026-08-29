@@ -9,6 +9,20 @@
 //   add_competitor  { business_id, place_id, name }
 //   list_businesses {}
 //
+// CRM pipeline board actions (feature/crm-pipeline-board) — reads go
+// straight from the client via the anon key + RLS (see
+// 20260821180000_crm_read_policies.sql); only writes route through here,
+// same policy as everything else in this file:
+//   update_stage    { business_id, stage }
+//   log_activity    { business_id, type, body?, metadata? }
+//   upsert_deal     { id?, business_id, product_sku?, amount?, is_trial?, trial_start?, trial_end?, status? }
+//   set_sms_consent { business_id, consent }        → only path allowed to set sms_consent=true (crm-spec.md 2c)
+//   schedule_message{ business_id, body, send_at }  → 400 unless businesses.sms_consent is true
+//   log_pre_call    { business_id, contact_name?, dm_days?, dm_window?, disqualifier? }
+//     — the pre-call block (lead-engine-spec.md §5.2): upserts the primary
+//     contact's dm_days/dm_window/verified_at, logs a `pre_call` activity,
+//     and if a disqualifier is given, sets businesses.do_not_contact=true.
+//
 // Deploy: supabase functions deploy admin-api --no-verify-jwt
 // Guarded by ADMIN_TOKEN, checked below.
 // ============================================================================
@@ -243,6 +257,160 @@ Deno.serve(async (req) => {
     if (cErr) return json({ error: cErr.message }, 400);
 
     return json({ business: biz, slug, url: tapUrl(slug) });
+  }
+
+  // ============================================================ CRM board
+  const STAGES = [
+    "scraped", "qualified", "pre_called", "visit_planned", "rescheduled",
+    "sale_hardware", "trial_active", "won", "lost", "customer", "churned",
+  ];
+  const ACTIVITY_TYPES = ["pre_call", "visit", "outcome", "text_sent", "review_milestone", "note"];
+
+  // ------------------------------------------------------------ update_stage
+  if (action === "update_stage") {
+    if (!STAGES.includes(p.stage)) return json({ error: `invalid stage: ${p.stage}` }, 400);
+    const { data, error } = await admin
+      .from("businesses")
+      .update({ stage: p.stage, stage_updated_at: new Date().toISOString() })
+      .eq("id", p.business_id)
+      .select("id, stage, stage_updated_at")
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
+  // ----------------------------------------------------------- log_activity
+  // Covers one-tap outcome logging AND voice/text note capture — both are
+  // just an `activities` row; the board tells them apart by `type`.
+  if (action === "log_activity") {
+    if (!ACTIVITY_TYPES.includes(p.type)) return json({ error: `invalid activity type: ${p.type}` }, 400);
+    const { data, error } = await admin
+      .from("activities")
+      .insert({ business_id: p.business_id, type: p.type, body: p.body ?? null, metadata: p.metadata ?? null })
+      .select()
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ activity: data });
+  }
+
+  // -------------------------------------------------------------- upsert_deal
+  if (action === "upsert_deal") {
+    const fields = {
+      business_id: p.business_id,
+      product_sku: p.product_sku ?? null,
+      amount: p.amount ?? null,
+      is_trial: p.is_trial ?? false,
+      trial_start: p.trial_start ?? null,
+      trial_end: p.trial_end ?? null,
+      status: p.status ?? "open",
+    };
+    const { data, error } = p.id
+      ? await admin.from("deals").update(fields).eq("id", p.id).select().single()
+      : await admin.from("deals").insert(fields).select().single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ deal: data });
+  }
+
+  // ---------------------------------------------------------- sms_consent
+  // crm-spec.md 2c: creating a trial requires an explicit SMS opt-in
+  // checkbox, which must set sms_consent=true + sms_consent_at=now() —
+  // this is the only path that's allowed to flip sms_consent to true.
+  // Also handles STOP-triggered opt-out (consent=false), per the
+  // constraints section: honor STOP by flipping this AND the matching
+  // scheduled_messages to 'stopped' (that second half is still a TODO
+  // for whoever wires the inbound STOP webhook).
+  if (action === "set_sms_consent") {
+    const { data, error } = await admin
+      .from("businesses")
+      .update({
+        sms_consent: Boolean(p.consent),
+        sms_consent_at: p.consent ? new Date().toISOString() : null,
+      })
+      .eq("id", p.business_id)
+      .select("id, sms_consent, sms_consent_at")
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
+  // ----------------------------------------------------------- log_pre_call
+  // lead-engine-spec.md §5.2: "Log four things: 1. Owner/manager name,
+  // 2. Days present, 3. Time window, 4. Any disqualifier." Not selling on
+  // this call — this is the only write it makes.
+  if (action === "log_pre_call") {
+    const { data: existing } = await admin
+      .from("contacts")
+      .select("id")
+      .eq("business_id", p.business_id)
+      .eq("is_primary", true)
+      .maybeSingle();
+
+    const contactFields: Record<string, unknown> = {
+      dm_days: p.dm_days ?? null,
+      dm_window: p.dm_window ?? null,
+      verified_at: new Date().toISOString(),
+    };
+    if (p.contact_name) contactFields.name = p.contact_name;
+
+    const { error: cErr } = existing
+      ? await admin.from("contacts").update(contactFields).eq("id", existing.id)
+      : await admin.from("contacts").insert({
+          business_id: p.business_id,
+          role: "owner",
+          is_primary: true,
+          source: "phone_call",
+          ...contactFields,
+        });
+    if (cErr) return json({ error: cErr.message }, 400);
+
+    const summary = [
+      p.contact_name ? `Spoke with ${p.contact_name}.` : null,
+      p.dm_days?.length ? `In: ${p.dm_days.join(", ")}.` : null,
+      p.dm_window ? `Window: ${p.dm_window}.` : null,
+      p.disqualifier ? `Disqualified: ${p.disqualifier}.` : null,
+    ].filter(Boolean).join(" ");
+
+    const { data: activity, error: aErr } = await admin
+      .from("activities")
+      .insert({
+        business_id: p.business_id,
+        type: "pre_call",
+        body: summary || null,
+        metadata: { dm_days: p.dm_days ?? null, dm_window: p.dm_window ?? null, disqualifier: p.disqualifier ?? null },
+      })
+      .select()
+      .single();
+    if (aErr) return json({ error: aErr.message }, 400);
+
+    // lead-engine-spec.md §5.5: "add a do-not-contact flag ... and honor
+    // it permanently." Only sets it — never clears it from here.
+    if (p.disqualifier) {
+      const { error: dErr } = await admin.from("businesses").update({ do_not_contact: true }).eq("id", p.business_id);
+      if (dErr) return json({ error: dErr.message }, 400);
+    }
+
+    return json({ activity, do_not_contact: Boolean(p.disqualifier) });
+  }
+
+  // --------------------------------------------------------- schedule_message
+  // crm-spec.md 2c/§ SMS consent: no automated text may be scheduled for a
+  // business that hasn't opted in. Trial creation is supposed to set
+  // sms_consent=true up front (see upsert_deal + the trial-signup flow) —
+  // this is the backstop that actually enforces it at write time.
+  if (action === "schedule_message") {
+    const { data: biz, error: bErr } = await admin
+      .from("businesses").select("sms_consent").eq("id", p.business_id).single();
+    if (bErr) return json({ error: bErr.message }, 400);
+    if (!biz.sms_consent) {
+      return json({ error: "cannot schedule: business has not given sms_consent" }, 400);
+    }
+    const { data, error } = await admin
+      .from("scheduled_messages")
+      .insert({ business_id: p.business_id, body: p.body, send_at: p.send_at })
+      .select()
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ scheduled_message: data });
   }
 
   return json({ error: "unknown action" }, 400);
