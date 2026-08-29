@@ -3,6 +3,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { ACTIVITY_TYPE_LABELS, STAGE_LABELS } from "../../lib/stages";
 import { OutcomeButtons } from "./OutcomeButtons";
 import { VoiceNote } from "./VoiceNote";
+import { FollowUpPicker } from "./FollowUpPicker";
 
 // crm-spec.md 2a: "Clicking a business opens a detail drawer: the
 // activities timeline + any open deals." (contacts included too — it's
@@ -53,6 +54,11 @@ export function BusinessDrawer({ businessId, onClose, onChanged }) {
           <>
             <h2>{business.name}</h2>
             <div className="drawer-stage-pill">{STAGE_LABELS[business.stage]}</div>
+
+            <section>
+              <h3>Follow-up</h3>
+              <FollowUpPicker business={business} onSaved={refresh} />
+            </section>
 
             <section>
               <h3>Outcome</h3>

@@ -6,13 +6,13 @@ import { PreCallLogForm } from "./PreCallLogForm";
 
 const BUSINESS_FIELDS =
   "id, name, stage, google_place_id, tier, rank_score, category_group, corridor, " +
-  "best_callback_window, do_not_contact";
+  "best_callback_window, do_not_contact, follow_up_at";
 
 // crm-spec.md 2b: "Location-sort the list so the nearest un-visited
 // business floats to the top." This is that view — separate from the
 // board, since it's a route-planning tool for the pre-call block
 // (lead-engine-spec.md §5), not a pipeline overview.
-export function CallList() {
+export function CallList({ search = "" }) {
   const [businesses, setBusinesses] = useState([]);
   const [places, setPlaces] = useState({}); // google_place_id -> {lat, lng}
   const [visited, setVisited] = useState(new Set()); // business_id
@@ -90,19 +90,34 @@ export function CallList() {
   if (loading) return <div className="board-status">Loading call list…</div>;
   if (error) return <div className="board-status error">{error}</div>;
 
-  const rows = businesses
+  const q = search.trim().toLowerCase();
+  const filtered = q ? businesses.filter((b) => b.name?.toLowerCase().includes(q)) : businesses;
+
+  const rows = filtered
     .map((b) => {
       const loc = places[b.google_place_id];
       const distance = userLoc && loc?.lat != null && loc?.lng != null
         ? distanceMeters(userLoc.lat, userLoc.lng, loc.lat, loc.lng)
         : null;
-      return { business: b, distance, isVisited: visited.has(b.id), contact: contacts[b.id] };
+      const followUpAt = b.follow_up_at ? new Date(b.follow_up_at) : null;
+      return {
+        business: b,
+        distance,
+        isVisited: visited.has(b.id),
+        contact: contacts[b.id],
+        followUpAt,
+        followUpDue: followUpAt != null && followUpAt.getTime() <= Date.now(),
+      };
     })
-    // Nearest-unvisited-first: unvisited before visited, then by distance
-    // (unknown distance sorts last within its group), then tier, then
-    // rank_score — the latter two are usually still null until the
-    // scoring job (lead-engine-spec.md §3.2) is built.
+    // A due/overdue follow-up trumps everything else — that's a specific
+    // commitment ("call back Thursday 2pm"), not a general prioritization
+    // signal. Below that: nearest-unvisited-first — unvisited before
+    // visited, then by distance (unknown distance sorts last within its
+    // group), then tier, then rank_score — the latter two are usually
+    // still null until the scoring job (lead-engine-spec.md §3.2) is built.
     .sort((a, b) => {
+      if (a.followUpDue !== b.followUpDue) return a.followUpDue ? -1 : 1;
+      if (a.followUpDue && b.followUpDue) return a.followUpAt - b.followUpAt;
       if (a.isVisited !== b.isVisited) return a.isVisited ? 1 : -1;
       if (a.distance != null && b.distance != null) return a.distance - b.distance;
       if (a.distance != null) return -1;
@@ -115,14 +130,22 @@ export function CallList() {
     <div className="call-list">
       {geoError ? <p className="board-status error">{geoError}</p> : null}
       {!userLoc && !geoError ? <p className="board-status">Getting your location…</p> : null}
-      {rows.length === 0 ? <p className="empty">Nothing to call right now.</p> : null}
+      {rows.length === 0 ? (
+        <p className="empty">{q ? `No businesses match "${search}".` : "Nothing to call right now."}</p>
+      ) : null}
       <ul className="call-list-rows">
-        {rows.map(({ business, distance, isVisited, contact }) => (
+        {rows.map(({ business, distance, isVisited, contact, followUpAt, followUpDue }) => (
           <li key={business.id} className={isVisited ? "visited" : ""}>
             <div className="call-row-main">
               <div>
                 <div className="call-row-name">{business.name}</div>
                 <div className="call-row-meta">
+                  {followUpAt ? (
+                    <span className={`pill${followUpDue ? " status-lost" : ""}`}>
+                      {followUpDue ? "Follow up: " : "Follow up "}
+                      {followUpAt.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </span>
+                  ) : null}
                   <span className="pill">{STAGE_LABELS[business.stage]}</span>
                   {business.tier ? <span className="pill">Tier {business.tier}</span> : null}
                   {isVisited ? <span className="pill">visited</span> : null}

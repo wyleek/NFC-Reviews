@@ -39,8 +39,16 @@ function healthOf(gained14, gained30) {
 const HEALTH_RANK = { red: 0, yellow: 1, green: 2 };
 const HEALTH_LABEL = { red: "No reviews in 30+ days", yellow: "Slowing down", green: "Healthy" };
 
+const HEALTH_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "green", label: "🟢 Green" },
+  { id: "yellow", label: "🟡 Yellow" },
+  { id: "red", label: "🔴 Red" },
+];
+
 export function ClientsTab() {
   const [state, setState] = useState({ loading: true, error: null, clients: [] });
+  const [healthFilter, setHealthFilter] = useState("all");
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -120,6 +128,8 @@ export function ClientsTab() {
   }, []);
 
   const { loading, error, clients } = state;
+  const visibleClients =
+    healthFilter === "all" ? clients : clients.filter((c) => c.health === healthFilter);
 
   return (
     <div className="wrap">
@@ -128,6 +138,21 @@ export function ClientsTab() {
       <p className="sub">
         Worst health first — a slipping account shouldn't require opening its full dashboard to spot.
       </p>
+
+      {supabaseConfigured && !loading && !error && clients.length > 0 && (
+        <div className="crm-nav" style={{ marginBottom: 16 }}>
+          {HEALTH_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={healthFilter === f.id ? "active" : ""}
+              onClick={() => setHealthFilter(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!supabaseConfigured && (
         <div className="card">
@@ -147,10 +172,17 @@ export function ClientsTab() {
           </p>
         </div>
       )}
+      {supabaseConfigured && !loading && !error && clients.length > 0 && visibleClients.length === 0 && (
+        <div className="card">
+          <p className="sub" style={{ margin: 0 }}>
+            No customers match this filter.
+          </p>
+        </div>
+      )}
 
       {!loading &&
         !error &&
-        clients.map((c) => (
+        visibleClients.map((c) => (
           <div key={c.id} className="hit" style={{ cursor: "default" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span className={`health-dot ${c.health}`} title={HEALTH_LABEL[c.health]} />
