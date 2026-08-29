@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import {
   ChevronRight, Smartphone, Zap, Check, Calendar, ArrowUpRight,
-  Trophy, Lightbulb, X,
+  Lightbulb, X,
 } from "lucide-react";
 
 /* ==================================================================
@@ -172,50 +172,38 @@ function useBusinessId() {
   return { businessId, resolving };
 }
 
-// Business, cards, full review-snapshot history, competitors — refetched
-// only when the business changes, not on every range change.
+// Business, cards, full review-snapshot history — refetched only when the
+// business changes, not on every range change.
+//
+// Competitor tracking (competitors/competitor_velocity/competitor_snapshots)
+// was pulled out of this dashboard — the feature isn't ready yet (see the
+// competitor-rolling-tracking branch, which never actually landed any
+// implementation). The tables and the admin-api add_competitor action are
+// still in place, just unused, so this is easy to bring back later.
 function useBusinessData(businessId) {
-  const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [], competitors: [] });
+  const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [] });
 
   useEffect(() => {
     if (!businessId) { setState((s) => ({ ...s, loading: false })); return; }
     let cancelled = false;
     (async () => {
       setState((s) => ({ ...s, loading: true }));
-      const [{ data: business }, { data: cards }, { data: snapshots }, { data: competitors }] = await Promise.all([
+      const [{ data: business }, { data: cards }, { data: snapshots }] = await Promise.all([
         supabase.from("businesses").select("*").eq("id", businessId).maybeSingle(),
-        supabase.from("cards").select("*").eq("business_id", businessId).order("created_at"),
+        // active-only: an inactive card is a deactivated duplicate (see the
+        // Yogamour dedup cleanup), not a real placement — it shouldn't count
+        // toward "N cards placed" or show up in the By-card breakdown.
+        supabase.from("cards").select("*").eq("business_id", businessId).eq("active", true).order("created_at"),
         supabase.from("review_snapshots").select("captured_on, review_count, rating")
           .eq("business_id", businessId).order("captured_on"),
-        supabase.from("competitors").select("id, name").eq("business_id", businessId),
       ]);
       if (cancelled) return;
-
-      let competitorStats = [];
-      if (competitors?.length) {
-        const ids = competitors.map((c) => c.id);
-        const [{ data: velocity }, { data: compSnaps }] = await Promise.all([
-          supabase.from("competitor_velocity").select("*").in("competitor_id", ids),
-          supabase.from("competitor_snapshots").select("competitor_id, rating, captured_on")
-            .in("competitor_id", ids).order("captured_on"),
-        ]);
-        const latestRating = {};
-        for (const s of compSnaps ?? []) latestRating[s.competitor_id] = s.rating; // last write wins (ascending order)
-        competitorStats = (velocity ?? []).map((v) => ({
-          name: v.name,
-          reviews: v.review_count ?? 0,
-          rating: latestRating[v.competitor_id] ?? null,
-          gained30: v.reviews_gained ?? 0,
-          velocity: v.reviews_per_month ?? 0,
-        })).sort((a, b) => b.reviews - a.reviews);
-      }
 
       setState({
         loading: false,
         business: business ?? null,
         cards: cards ?? [],
         snapshots: snapshots ?? [],
-        competitors: competitorStats,
       });
     })();
     return () => { cancelled = true; };
@@ -260,7 +248,7 @@ export default function Dashboard() {
   const wrapRef = useRef(null);
 
   const { businessId, resolving } = useBusinessId();
-  const { loading: bizLoading, business, cards, snapshots, competitors } = useBusinessData(businessId);
+  const { loading: bizLoading, business, cards, snapshots } = useBusinessData(businessId);
 
   const rangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
   const rangeEnd = custom ? startOfDay(custom[1]) : today;
@@ -324,13 +312,9 @@ export default function Dashboard() {
   const revGained = revStart != null && revEnd != null ? revEnd - revStart : 0;
 
   const priorTaps = priorData.reduce((s, d) => s + d.taps, 0);
-  const priorRevStart = priorData[0]?.reviews ?? revStart;
-  const priorRevEnd = priorData[priorData.length - 1]?.reviews ?? priorRevStart;
-  const priorRevGained = priorRevStart != null && priorRevEnd != null ? priorRevEnd - priorRevStart : 0;
 
   const pct = (now, before) => (!before ? null : Math.round(((now - before) / before) * 100));
   const tapDelta = pct(tapsInRange, priorTaps);
-  const revDelta = pct(revGained, priorRevGained);
   const velocity = (revGained / days) * 30;
 
   const label = custom
@@ -370,8 +354,11 @@ export default function Dashboard() {
     return top.map((h) => h.h).join(" and ");
   }, [HOURS]);
 
+  // Each stat gets its own rounded Panel instead of one panel sliced up with
+  // divide-x — a Tailwind divide-x border defaults to a hard black line with
+  // no color override, which read as a stray hard rule between everything.
   const Metric = ({ label: l, value, delta, sub }) => (
-    <div className="flex-1 min-w-[160px] px-6 py-6">
+    <Panel className="flex-1 min-w-[160px] px-6 py-6">
       <div className="text-[11px] uppercase tracking-[0.1em] mb-3" style={{ color: MUTED }}>{l}</div>
       <div className="flex items-end gap-2.5">
         <div className="text-[46px] leading-[0.9] font-bold tabular-nums tracking-tight" style={{ color: INK }}>{value}</div>
@@ -384,7 +371,7 @@ export default function Dashboard() {
         )}
       </div>
       {sub && <div className="text-[12px] mt-2.5" style={{ color: MUTED }}>{sub}</div>}
-    </div>
+    </Panel>
   );
 
   const cardTapsInRange = (id) => data.reduce((s, d) => s + (d[id] ?? 0), 0);
@@ -393,17 +380,7 @@ export default function Dashboard() {
     : null;
   const topCardShare = topCard ? Math.round((cardTapsInRange(topCard.id) / Math.max(1, tapsInRange)) * 100) : 0;
 
-  const topCompetitor = competitors[0] ?? null;
-  const ahead = topCompetitor ? competitors.filter((c) => c.reviews > (revEnd ?? 0)).length : 0;
-  const gap = topCompetitor ? topCompetitor.reviews - (revEnd ?? 0) : 0;
-  const netPace = topCompetitor ? Math.max(0.5, velocity - topCompetitor.velocity) : 0;
-
   const RECS = [
-    topCompetitor && gap > 0 && {
-      tag: "Close the gap",
-      title: `You're ${gap} reviews behind ${topCompetitor.name}`,
-      body: `You're gaining ${velocity.toFixed(1)} reviews a month to their ${topCompetitor.velocity}. Keep that up and you'd pass them in roughly ${Math.ceil(gap / netPace)} months. Adding a card at a second touchpoint is the fastest way to speed that up.`,
-    },
     topCard && {
       tag: "Placement",
       title: `${topCard.label} drives ${topCardShare}% of your taps`,
@@ -477,12 +454,12 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <Panel className="flex flex-wrap divide-x mb-3">
+        <div className="flex flex-wrap gap-3 mb-3">
           <Metric label="Taps" value={tapsInRange.toLocaleString()} delta={tapDelta} sub={`${label.toLowerCase()} · ${(tapsInRange / days).toFixed(1)}/day`} />
           <Metric label="Google reviews" value={revEnd ?? "—"} sub={revStart != null ? `${revStart} at start of period` : "no snapshots yet"} />
-          <Metric label="Reviews gained" value={`+${revGained}`} delta={revDelta} sub={label.toLowerCase()} />
+          <Metric label="Reviews gained" value={revGained} sub={label.toLowerCase()} />
           <Metric label="Star rating" value={business.current_rating ?? "—"} sub="Google average" />
-        </Panel>
+        </div>
 
         <Panel className="p-6 mb-3">
           <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
@@ -597,48 +574,6 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </Panel>
         </div>
-
-        <Panel className="p-6 mb-3">
-          <div className="flex items-center gap-2">
-            <Trophy size={14} style={{ color: MUTED }} />
-            <Title sub="Tracked daily from public Google listings">How you stack up nearby</Title>
-          </div>
-          {competitors.length === 0 ? (
-            <div className="text-[13px]" style={{ color: MUTED }}>No competitors tracked yet — add one from admin.html.</div>
-          ) : (
-            <>
-              <div className="space-y-1">
-                {[{ name: business.name, reviews: revEnd ?? 0, rating: business.current_rating, gained30: Math.round(velocity), you: true }, ...competitors]
-                  .sort((a, b) => b.reviews - a.reviews)
-                  .map((c) => {
-                    const max = Math.max(revEnd ?? 0, ...competitors.map((x) => x.reviews));
-                    return (
-                      <div key={c.name} className="flex items-center gap-4 py-2.5 px-3 rounded-lg"
-                           style={{ background: c.you ? "#f5f8ff" : "transparent" }}>
-                        <div className="w-40 shrink-0 text-[13px] truncate" style={{ color: INK, fontWeight: c.you ? 700 : 400 }}>
-                          {c.name}
-                          {c.you && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded align-middle" style={{ background: ACCENT, color: "#fff" }}>YOU</span>}
-                        </div>
-                        <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
-                          <div className="h-full rounded-full" style={{ width: `${max ? (c.reviews / max) * 100 : 0}%`, background: c.you ? ACCENT : "#d4d7de" }} />
-                        </div>
-                        <div className="w-12 text-right text-[15px] font-bold tabular-nums" style={{ color: INK }}>{c.reviews}</div>
-                        <div className="w-10 text-right text-[12px] tabular-nums" style={{ color: MUTED }}>{c.rating != null ? `★${c.rating}` : "—"}</div>
-                        <div className="w-20 text-right text-[12px] tabular-nums" style={{ color: c.you ? "#1a7f4b" : MUTED }}>
-                          +{c.gained30}/mo
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-              <div className="mt-4 pt-4 border-t text-[12px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>
-                You're gaining <strong style={{ color: INK }}>{velocity.toFixed(1)} reviews a month</strong> versus{" "}
-                {topCompetitor.velocity}/mo for {topCompetitor.name}.{" "}
-                {ahead === 0 ? "You lead the neighborhood." : `${ahead} nearby ${ahead === 1 ? "business is" : "businesses are"} still ahead on total reviews.`}
-              </div>
-            </>
-          )}
-        </Panel>
 
         <Panel className="p-6">
           <div className="flex items-center gap-2">

@@ -9,7 +9,7 @@ const BUSINESS_FIELDS =
   "rank_score, traffic_score, category_group, tier, corridor, best_callback_window, " +
   "sms_consent, do_not_contact";
 
-export function KanbanBoard({ onOpen, refreshToken }) {
+export function KanbanBoard({ onOpen, refreshToken, search = "" }) {
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -48,13 +48,33 @@ export function KanbanBoard({ onOpen, refreshToken }) {
   if (loading && businesses.length === 0) return <div className="board-status">Loading board…</div>;
   if (error) return <div className="board-status error">{error}</div>;
 
+  const q = search.trim().toLowerCase();
+  const visible = q ? businesses.filter((b) => b.name?.toLowerCase().includes(q)) : businesses;
+
+  // Empty stages are hidden to keep the board from cluttering up — a card
+  // can still be moved into any stage via its per-card <select> (see
+  // BusinessCard.jsx), which lists every stage regardless of whether that
+  // stage's column is currently rendered here.
+  const columns = STAGES.map((stage) => ({
+    stage,
+    businesses: visible.filter((b) => b.stage === stage),
+  })).filter((c) => c.businesses.length > 0);
+
+  if (columns.length === 0) {
+    return (
+      <div className="board-status">
+        {q ? `No businesses match "${search}".` : "No businesses on the board yet."}
+      </div>
+    );
+  }
+
   return (
     <div className="board">
-      {STAGES.map((stage) => (
+      {columns.map(({ stage, businesses: stageBusinesses }) => (
         <StageColumn
           key={stage}
           stage={stage}
-          businesses={businesses.filter((b) => b.stage === stage)}
+          businesses={stageBusinesses}
           onOpen={onOpen}
           onDropBusiness={handleDrop}
         />

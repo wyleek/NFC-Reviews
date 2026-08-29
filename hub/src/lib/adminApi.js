@@ -50,6 +50,8 @@ export const adminApi = {
     call("create_business", { name, place_id, review_count, rating, contact, cards }),
 
   // CRM tab
+  setFollowUp: (business_id, follow_up_at) => call("set_follow_up", { business_id, follow_up_at }),
+
   updateStage: (business_id, stage) => call("update_stage", { business_id, stage }),
 
   logActivity: (business_id, type, body, metadata) =>

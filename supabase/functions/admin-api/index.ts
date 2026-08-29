@@ -306,6 +306,20 @@ Deno.serve(async (req) => {
   ];
   const ACTIVITY_TYPES = ["pre_call", "visit", "outcome", "text_sent", "review_milestone", "note"];
 
+  // --------------------------------------------------------- set_follow_up
+  // Structured "call back on this date/time" — pass follow_up_at: null to
+  // clear it once the call happens.
+  if (action === "set_follow_up") {
+    const { data, error } = await admin
+      .from("businesses")
+      .update({ follow_up_at: p.follow_up_at ?? null })
+      .eq("id", p.business_id)
+      .select("id, follow_up_at")
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
   // ------------------------------------------------------------ update_stage
   if (action === "update_stage") {
     if (!STAGES.includes(p.stage)) return json({ error: `invalid stage: ${p.stage}` }, 400);

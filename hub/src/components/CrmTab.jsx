@@ -2,7 +2,6 @@ import { useState } from "react";
 import { KanbanBoard } from "./crm/KanbanBoard";
 import { BusinessDrawer } from "./crm/BusinessDrawer";
 import { CallList } from "./crm/CallList";
-import { NewLeadsList } from "./crm/NewLeadsList";
 import { supabaseConfigured } from "../lib/supabaseClient";
 
 // Port of board/ (branch feature/crm-pipeline-board) into the hub — see
@@ -16,13 +15,18 @@ import { supabaseConfigured } from "../lib/supabaseClient";
 const SUBTABS = [
   { id: "board", label: "Board" },
   { id: "calls", label: "Call list" },
-  { id: "leads", label: "New leads" },
 ];
+
+// "New leads" sub-tab (NewLeadsList.jsx, reading the v_call_list view) was
+// removed from view at the user's request — the manual add-business flow
+// (AdminTab) replaced the scraper-fed leads pipeline it was built for.
+// The component still exists if it's ever needed again.
 
 export function CrmTab() {
   const [subtab, setSubtab] = useState("board");
   const [openBusinessId, setOpenBusinessId] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [search, setSearch] = useState("");
 
   if (!supabaseConfigured) {
     return (
@@ -42,25 +46,32 @@ export function CrmTab() {
 
   return (
     <div className="crm">
-      <nav className="crm-nav">
-        {SUBTABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={subtab === t.id ? "active" : ""}
-            onClick={() => setSubtab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+      <nav className="crm-nav" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {SUBTABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={subtab === t.id ? "active" : ""}
+              onClick={() => setSubtab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <input
+          type="search"
+          placeholder="Search businesses…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ maxWidth: 240, padding: "8px 12px", fontSize: 14 }}
+        />
       </nav>
 
       {subtab === "board" ? (
-        <KanbanBoard onOpen={(b) => setOpenBusinessId(b.id)} refreshToken={refreshToken} />
-      ) : subtab === "calls" ? (
-        <CallList />
+        <KanbanBoard onOpen={(b) => setOpenBusinessId(b.id)} refreshToken={refreshToken} search={search} />
       ) : (
-        <NewLeadsList />
+        <CallList search={search} />
       )}
 
       {openBusinessId ? (
