@@ -169,6 +169,7 @@
   border-radius:8px;padding:6px 10px}
 .day-off{background:#fff;color:var(--ink);border:1px solid var(--line)}
 .day-on{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.precall-days button:disabled{opacity:.4;cursor:not-allowed}
 .precall-window{display:flex;gap:12px}
 .precall-window label{flex:1}
 .precall-actions{display:flex;gap:8px}
@@ -182,6 +183,9 @@
 .call-list-batch{background:var(--bg);border:1px solid var(--line);border-radius:12px;
   padding:12px;margin-bottom:12px;display:flex;flex-direction:column;gap:10px}
 .call-list-batch textarea{width:100%;font:inherit;font-size:13px;padding:8px;resize:vertical}
+.call-list-batch-city{display:flex;flex-direction:column;gap:4px;font-size:12px;
+  font-weight:600;color:var(--muted);max-width:240px}
+.call-list-batch-city input{padding:7px 8px;font-size:13px}
 .call-list-batch-actions{display:flex;align-items:center;gap:10px}
 .batch-review-list>li{background:#fff}
 

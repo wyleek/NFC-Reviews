@@ -12,18 +12,42 @@ const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // captures a required start time (dm_window_start) and optional end time
 // (dm_window_end), and keeps the free-text field around as an optional
 // extra note (dm_window) rather than the primary way to record timing.
-export function PreCallLogForm({ business, onLogged, onCancel }) {
-  const [contactName, setContactName] = useState("");
-  const [dmDays, setDmDays] = useState([]);
-  const [windowStart, setWindowStart] = useState("");
-  const [windowEnd, setWindowEnd] = useState("");
-  const [dmWindow, setDmWindow] = useState("");
+//
+// `contact` — the business's current primary contact, if any — pre-fills
+// every field below. log_pre_call (admin-api) always writes a fresh full
+// record on submit (dm_days/dm_window/times are overwritten, not merged),
+// so reopening this form blank on a business that's already been called
+// once meant an unchanged resubmit would silently wipe out whatever was
+// logged last time. Pre-filling from `contact` fixes that: what's already
+// known shows up already selected, ready to confirm or correct.
+export function PreCallLogForm({ business, contact, onLogged, onCancel }) {
+  const [contactName, setContactName] = useState(contact?.name ?? "");
+  const [dmDays, setDmDays] = useState(contact?.dm_days ?? []);
+  // Distinguishes "asked, and there's genuinely no fixed schedule" from
+  // "just haven't touched this yet" — otherwise an empty day row looks the
+  // same either way. Defaults on when this contact was already verified
+  // once (a prior call happened) but came back with no specific days.
+  const [daysUnknown, setDaysUnknown] = useState(
+    Boolean(contact?.verified_at) && !contact?.dm_days?.length,
+  );
+  const [windowStart, setWindowStart] = useState(contact?.dm_window_start ?? "");
+  const [windowEnd, setWindowEnd] = useState(contact?.dm_window_end ?? "");
+  const [dmWindow, setDmWindow] = useState(contact?.dm_window ?? "");
   const [disqualifier, setDisqualifier] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   function toggleDay(day) {
+    setDaysUnknown(false);
     setDmDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
+  }
+
+  function toggleDaysUnknown() {
+    setDaysUnknown((prev) => {
+      const next = !prev;
+      if (next) setDmDays([]);
+      return next;
+    });
   }
 
   async function submit(e) {
@@ -69,11 +93,19 @@ export function PreCallLogForm({ business, onLogged, onCancel }) {
             type="button"
             key={d}
             className={dmDays.includes(d) ? "day-on" : "day-off"}
+            disabled={daysUnknown}
             onClick={() => toggleDay(d)}
           >
             {d}
           </button>
         ))}
+        <button
+          type="button"
+          className={daysUnknown ? "day-on" : "day-off"}
+          onClick={toggleDaysUnknown}
+        >
+          Days unknown
+        </button>
       </div>
       <div className="precall-window">
         <label>

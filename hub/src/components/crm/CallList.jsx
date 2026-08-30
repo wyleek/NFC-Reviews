@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { adminApi } from "../../lib/adminApi";
 import { CALL_LIST_STAGES, STAGE_LABELS } from "../../lib/stages";
+import { namesLikelyMatch, namesCollapseEqual } from "../../lib/nameMatch";
 import { PreCallLogForm } from "./PreCallLogForm";
 
 const BUSINESS_FIELDS =
@@ -39,10 +40,6 @@ function formatWindow(contact) {
   return end ? `${start}–${end}` : `${start}+`;
 }
 
-function normalizeName(s) {
-  return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
 // Batch-add heuristic: auto-add only when the top Google Places result's
 // name is a confident match for the typed line (an exact or substring
 // match, case/punctuation-insensitive) AND there isn't a similarly-named
@@ -51,13 +48,8 @@ function normalizeName(s) {
 // instead of silently adding the wrong location — see the batch-add UX
 // decision in the CRM handoff notes.
 function isConfidentMatch(query, top, second) {
-  if (!top) return false;
-  const nq = normalizeName(query);
-  const nt = normalizeName(top.name);
-  if (!nq || !nt) return false;
-  const namesMatch = nt === nq || nt.includes(nq) || nq.includes(nt);
-  if (!namesMatch) return false;
-  if (second && normalizeName(second.name) === nt) return false;
+  if (!top || !namesLikelyMatch(query, top.name)) return false;
+  if (second && namesCollapseEqual(top.name, second.name)) return false;
   return true;
 }
 
@@ -100,6 +92,15 @@ export function CallList({ search = "" }) {
   // a manual pick, instead of blocking the whole batch on one uncertain line.
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchText, setBatchText] = useState("");
+  // Tacked onto every line's search query ("Bluebird Coffee" -> "Bluebird
+  // Coffee, College Park") to bias Google Places toward the right result
+  // when batch-adding businesses that are all roughly in one area. Won't
+  // always be right (a business can be listed under a neighboring city),
+  // but covers most of a corridor-focused batch — see isConfidentMatch,
+  // which still checks the result's *name* against the plain line, not
+  // the city-qualified query, so a city mismatch alone won't cause a
+  // false-confident pick.
+  const [batchCity, setBatchCity] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchResults, setBatchResults] = useState([]); // [{line, status, business, candidates, reason}]
 
@@ -108,6 +109,10 @@ export function CallList({ search = "" }) {
   const [dayFilter, setDayFilter] = useState(() => new Set());
   const [timeFrom, setTimeFrom] = useState("");
   const [timeTo, setTimeTo] = useState("");
+  // A dedicated view for "everyone I still need to call" — overrides the
+  // day/time filter above rather than combining with it, since unscheduled
+  // rows have no day/time to filter against in the first place.
+  const [unscheduledOnly, setUnscheduledOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,10 +199,11 @@ export function CallList({ search = "" }) {
     if (!lines.length) return;
     setBatchBusy(true);
     setBatchResults([]);
+    const city = batchCity.trim();
     const results = [];
     for (const line of lines) {
       try {
-        const d = await adminApi.searchPlace(line);
+        const d = await adminApi.searchPlace(city ? `${line}, ${city}` : line);
         const places = d.places ?? [];
         if (!places.length) {
           results.push({ line, status: "flagged", reason: "No match found", candidates: [] });
@@ -248,6 +254,19 @@ export function CallList({ search = "" }) {
     setDayFilter(new Set());
     setTimeFrom("");
     setTimeTo("");
+    setUnscheduledOnly(false);
+  }
+
+  function toggleUnscheduledOnly() {
+    setUnscheduledOnly((prev) => {
+      const next = !prev;
+      if (next) {
+        setDayFilter(new Set());
+        setTimeFrom("");
+        setTimeTo("");
+      }
+      return next;
+    });
   }
 
   if (loading) return <div className="board-status">Loading call list…</div>;
@@ -336,15 +355,19 @@ export function CallList({ search = "" }) {
 
   // Unscheduled rows have no day/time to filter against — hide the bucket
   // entirely while a day/time filter is active rather than show a group
-  // that can't actually match what was asked for.
+  // that can't actually match what was asked for. "Unscheduled only" is
+  // the opposite ask (everyone still needing a call), so it short-circuits
+  // straight to just that bucket.
   const showUnscheduled = !dayFilterActive && !timeFilterActive;
 
-  const groups = [
-    ...DAYS.map((day, i) => ({ label: day, rows: byDay[i] })),
-    ...(showUnscheduled ? [{ label: "Unscheduled", rows: unscheduled }] : []),
-  ].filter((g) => g.rows.length > 0);
+  const groups = unscheduledOnly
+    ? [{ label: "Unscheduled", rows: unscheduled }].filter((g) => g.rows.length > 0)
+    : [
+        ...DAYS.map((day, i) => ({ label: day, rows: byDay[i] })),
+        ...(showUnscheduled ? [{ label: "Unscheduled", rows: unscheduled }] : []),
+      ].filter((g) => g.rows.length > 0);
 
-  const filtersActive = dayFilterActive || timeFilterActive;
+  const filtersActive = dayFilterActive || timeFilterActive || unscheduledOnly;
   const pendingBatch = batchResults.filter((r) => r.status === "flagged" || r.status === "error");
   const addedBatch = batchResults.filter((r) => r.status === "added");
 
@@ -397,6 +420,16 @@ export function CallList({ search = "" }) {
             onChange={(e) => setBatchText(e.target.value)}
             disabled={batchBusy}
           />
+          <label className="call-list-batch-city">
+            City (optional — added to every line's search)
+            <input
+              type="text"
+              placeholder="College Park"
+              value={batchCity}
+              onChange={(e) => setBatchCity(e.target.value)}
+              disabled={batchBusy}
+            />
+          </label>
           <div className="call-list-batch-actions">
             <button type="button" className="btn sm" onClick={runBatchAdd} disabled={batchBusy || !batchText.trim()}>
               {batchBusy ? "Adding…" : "Add all"}
@@ -442,26 +475,34 @@ export function CallList({ search = "" }) {
       ) : null}
 
       <div className="call-list-filters">
-        <div className="filter-days">
+        <button
+          type="button"
+          className={unscheduledOnly ? "day-on" : "day-off"}
+          onClick={toggleUnscheduledOnly}
+        >
+          Unscheduled
+        </button>
+        <div className="filter-days" style={unscheduledOnly ? { opacity: 0.4, pointerEvents: "none" } : undefined}>
           {DAYS.map((d) => (
             <button
               key={d}
               type="button"
               className={dayFilter.has(d) ? "day-on" : "day-off"}
+              disabled={unscheduledOnly}
               onClick={() => toggleDayFilter(d)}
             >
               {d}
             </button>
           ))}
         </div>
-        <div className="filter-time">
+        <div className="filter-time" style={unscheduledOnly ? { opacity: 0.4, pointerEvents: "none" } : undefined}>
           <label>
             From
-            <input type="time" value={timeFrom} onChange={(e) => setTimeFrom(e.target.value)} />
+            <input type="time" value={timeFrom} disabled={unscheduledOnly} onChange={(e) => setTimeFrom(e.target.value)} />
           </label>
           <label>
             To
-            <input type="time" value={timeTo} onChange={(e) => setTimeTo(e.target.value)} />
+            <input type="time" value={timeTo} disabled={unscheduledOnly} onChange={(e) => setTimeTo(e.target.value)} />
           </label>
         </div>
         {filtersActive ? (
@@ -528,7 +569,7 @@ export function CallList({ search = "" }) {
                     </button>
                   </div>
                   {loggingFor === business.id ? (
-                    <PreCallLogForm business={business} onLogged={refresh} onCancel={() => setLoggingFor(null)} />
+                    <PreCallLogForm business={business} contact={contact} onLogged={refresh} onCancel={() => setLoggingFor(null)} />
                   ) : null}
                 </li>
               );
