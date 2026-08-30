@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { adminApi } from "../lib/adminApi";
 import { supabase, supabaseConfigured } from "../lib/supabaseClient";
+import { namesLikelyMatch } from "../lib/nameMatch";
 import { SearchStep } from "./admin/SearchStep";
 import { QuickLinkCard } from "./admin/QuickLinkCard";
 import { ContactStep } from "./admin/ContactStep";
@@ -101,9 +102,18 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
   // making when the business genuinely isn't in our own `businesses` table
   // yet — most "find the business" searches in the field are actually
   // someone pulling up an existing customer (e.g. to add a card or fix a
-  // phone number), not a new lead. Query our own table first (same
-  // ilike-on-name pattern ClientsTab/CallList already use); only fall
-  // through to Google automatically when there's no local match.
+  // phone number), not a new lead.
+  //
+  // Pulls the whole table (small — a field-sales CRM's business list isn't
+  // going to be huge) and matches client-side with namesLikelyMatch
+  // instead of a single server-side ILIKE %query% substring, which is
+  // exactly the kind of match a stray apostrophe or a partial name breaks
+  // (typing "Bammys" wouldn't find "Bammy's Modern Caribbean" — an
+  // existing customer went unrecognized and a search that cost money ran
+  // when it didn't need to). Lenient on purpose: this only decides whether
+  // to show a local match before running that billed search, it never
+  // auto-adds anything, so a false positive just means an extra row shown.
+  // Only falls through to Google when nothing local matches at all.
   async function doSearch() {
     if (!query.trim()) return;
     setBusy(true);
@@ -115,11 +125,11 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
         const { data, error } = await supabase
           .from("businesses")
           .select("id, name, stage, google_place_id, current_review_count, current_rating")
-          .ilike("name", `%${query.trim()}%`)
           .order("name")
-          .limit(8);
-        if (!error && data?.length) {
-          setLocalHits(data);
+          .limit(500);
+        const matches = !error ? (data ?? []).filter((b) => namesLikelyMatch(query, b.name)) : [];
+        if (matches.length) {
+          setLocalHits(matches.slice(0, 8));
           setBusy(false);
           return;
         }

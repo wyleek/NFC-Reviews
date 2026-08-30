@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { adminApi } from "../../lib/adminApi";
 import { CALL_LIST_STAGES, STAGE_LABELS } from "../../lib/stages";
+import { namesLikelyMatch, namesCollapseEqual } from "../../lib/nameMatch";
 import { PreCallLogForm } from "./PreCallLogForm";
 
 const BUSINESS_FIELDS =
@@ -39,10 +40,6 @@ function formatWindow(contact) {
   return end ? `${start}–${end}` : `${start}+`;
 }
 
-function normalizeName(s) {
-  return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
 // Batch-add heuristic: auto-add only when the top Google Places result's
 // name is a confident match for the typed line (an exact or substring
 // match, case/punctuation-insensitive) AND there isn't a similarly-named
@@ -51,13 +48,8 @@ function normalizeName(s) {
 // instead of silently adding the wrong location — see the batch-add UX
 // decision in the CRM handoff notes.
 function isConfidentMatch(query, top, second) {
-  if (!top) return false;
-  const nq = normalizeName(query);
-  const nt = normalizeName(top.name);
-  if (!nq || !nt) return false;
-  const namesMatch = nt === nq || nt.includes(nq) || nq.includes(nt);
-  if (!namesMatch) return false;
-  if (second && normalizeName(second.name) === nt) return false;
+  if (!top || !namesLikelyMatch(query, top.name)) return false;
+  if (second && namesCollapseEqual(top.name, second.name)) return false;
   return true;
 }
 
