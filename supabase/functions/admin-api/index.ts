@@ -18,10 +18,18 @@
 //   upsert_deal     { id?, business_id, product_sku?, amount?, is_trial?, trial_start?, trial_end?, status? }
 //   set_sms_consent { business_id, consent }        → only path allowed to set sms_consent=true (crm-spec.md 2c)
 //   schedule_message{ business_id, body, send_at }  → 400 unless businesses.sms_consent is true
-//   log_pre_call    { business_id, contact_name?, dm_days?, dm_window?, disqualifier? }
+//   log_pre_call    { business_id, contact_name?, dm_days?, dm_window?, dm_window_start?, dm_window_end?, disqualifier? }
 //     — the pre-call block (lead-engine-spec.md §5.2): upserts the primary
-//     contact's dm_days/dm_window/verified_at, logs a `pre_call` activity,
-//     and if a disqualifier is given, sets businesses.do_not_contact=true.
+//     contact's dm_days/dm_window(_start/_end)/verified_at, logs a
+//     `pre_call` activity, and if a disqualifier is given, sets
+//     businesses.do_not_contact=true.
+//
+// Call List quick-add (feat/call-list-manual-add-scheduling):
+//   add_lead { place_id, name? }
+//     — find-or-create the business by google_place_id (never downgrades
+//     a stage past wherever it already is), pulls the phone number from a
+//     dedicated Places Details call, and inserts/updates its primary
+//     contact. Stage is only set to 'qualified' on first creation.
 //
 // Deploy: supabase functions deploy admin-api --no-verify-jwt
 // Guarded by ADMIN_TOKEN, checked below.
@@ -402,6 +410,8 @@ Deno.serve(async (req) => {
     const contactFields: Record<string, unknown> = {
       dm_days: p.dm_days ?? null,
       dm_window: p.dm_window ?? null,
+      dm_window_start: p.dm_window_start ?? null,
+      dm_window_end: p.dm_window_end ?? null,
       verified_at: new Date().toISOString(),
     };
     if (p.contact_name) contactFields.name = p.contact_name;
@@ -417,10 +427,14 @@ Deno.serve(async (req) => {
         });
     if (cErr) return json({ error: cErr.message }, 400);
 
+    const windowSummary = p.dm_window_start
+      ? `Available ${p.dm_window_start}${p.dm_window_end ? `–${p.dm_window_end}` : "+"}.`
+      : null;
     const summary = [
       p.contact_name ? `Spoke with ${p.contact_name}.` : null,
       p.dm_days?.length ? `In: ${p.dm_days.join(", ")}.` : null,
-      p.dm_window ? `Window: ${p.dm_window}.` : null,
+      windowSummary,
+      p.dm_window ? `Note: ${p.dm_window}.` : null,
       p.disqualifier ? `Disqualified: ${p.disqualifier}.` : null,
     ].filter(Boolean).join(" ");
 
@@ -430,7 +444,13 @@ Deno.serve(async (req) => {
         business_id: p.business_id,
         type: "pre_call",
         body: summary || null,
-        metadata: { dm_days: p.dm_days ?? null, dm_window: p.dm_window ?? null, disqualifier: p.disqualifier ?? null },
+        metadata: {
+          dm_days: p.dm_days ?? null,
+          dm_window: p.dm_window ?? null,
+          dm_window_start: p.dm_window_start ?? null,
+          dm_window_end: p.dm_window_end ?? null,
+          disqualifier: p.disqualifier ?? null,
+        },
       })
       .select()
       .single();
@@ -444,6 +464,81 @@ Deno.serve(async (req) => {
     }
 
     return json({ activity, do_not_contact: Boolean(p.disqualifier) });
+  }
+
+  // -------------------------------------------------------------- add_lead
+  // Call List quick-add (feat/call-list-manual-add-scheduling): type a name,
+  // press Enter, land it straight in the call list — no scraper pipeline,
+  // no Kanban drag needed. Mirrors create_business's find-or-create-by-
+  // place_id pattern (never downgrade a business that's already further
+  // along the pipeline) and log_pre_call's find-or-update-primary-contact
+  // pattern.
+  if (action === "add_lead") {
+    if (!p.place_id) return json({ error: "place_id required" }, 400);
+
+    // Dedicated Place Details request — search_place's field mask (above)
+    // doesn't request a phone number and that action belongs to a parallel
+    // workstream, so ask for phone here instead. Places API (New) requires
+    // every field, phone included, to be listed explicitly in the
+    // X-Goog-FieldMask header or it's simply omitted from the response.
+    const detailsRes = await fetch(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(p.place_id)}`,
+      {
+        headers: {
+          "X-Goog-Api-Key": PLACES_KEY,
+          "X-Goog-FieldMask": "id,displayName,formattedAddress,nationalPhoneNumber,internationalPhoneNumber",
+        },
+      },
+    );
+    if (!detailsRes.ok) return json({ error: await detailsRes.text() }, 502);
+    const d = await detailsRes.json();
+    const phone: string | null = d.nationalPhoneNumber ?? d.internationalPhoneNumber ?? null;
+    const name: string = p.name || d.displayName?.text || "Unknown business";
+
+    // Find-or-create by google_place_id — same dedup this file already
+    // relies on in create_business/quick_link. Unlike create_business
+    // (which is closing a sale, so it's fine to force stage='customer'),
+    // a quick-add must never regress a business that's already further
+    // along (e.g. already a customer) — so the existing row is left
+    // completely untouched, stage included.
+    const { data: existing } = await admin
+      .from("businesses").select()
+      .eq("google_place_id", p.place_id).maybeSingle();
+
+    let biz = existing;
+    if (!biz) {
+      const { data: made, error } = await admin.from("businesses").insert({
+        name,
+        google_place_id: p.place_id,
+        stage: "qualified",
+      }).select().single();
+      if (error) return json({ error: error.message }, 400);
+      biz = made;
+    }
+
+    // Insert-or-update the primary contact, same pattern as log_pre_call.
+    const { data: existingContact } = await admin
+      .from("contacts").select("id")
+      .eq("business_id", biz.id).eq("is_primary", true).maybeSingle();
+
+    if (phone) {
+      const { error: cErr } = existingContact
+        ? await admin.from("contacts").update({ phone }).eq("id", existingContact.id)
+        : await admin.from("contacts").insert({
+            business_id: biz.id, role: "owner", is_primary: true,
+            source: "google_places", phone,
+          });
+      if (cErr) return json({ error: cErr.message }, 400);
+    } else if (!existingContact) {
+      // Still worth a placeholder primary-contact row even with no phone —
+      // the pre-call form updates this same row in place.
+      const { error: cErr } = await admin.from("contacts").insert({
+        business_id: biz.id, role: "owner", is_primary: true, source: "google_places",
+      });
+      if (cErr) return json({ error: cErr.message }, 400);
+    }
+
+    return json({ business: biz, phone });
   }
 
   // --------------------------------------------------------- schedule_message
