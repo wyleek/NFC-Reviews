@@ -22,7 +22,7 @@ const SUBTABS = [
 // (AdminTab) replaced the scraper-fed leads pipeline it was built for.
 // The component still exists if it's ever needed again.
 
-export function CrmTab() {
+export function CrmTab({ onManageInAdmin }) {
   const [subtab, setSubtab] = useState("board");
   const [openBusinessId, setOpenBusinessId] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -79,6 +79,7 @@ export function CrmTab() {
           businessId={openBusinessId}
           onClose={() => setOpenBusinessId(null)}
           onChanged={() => setRefreshToken((t) => t + 1)}
+          onManageInAdmin={onManageInAdmin}
         />
       ) : null}
     </div>

@@ -14,6 +14,16 @@ const TABS = [
 function App() {
   const [configured, setConfigured] = useState(config.isSet);
   const [tab, setTab] = useState("admin");
+  // Carries a business_id from CRM's "Manage in Admin" over to the Admin
+  // tab so it can auto-load that business into its lookup flow — no URL
+  // routing, just in-memory state lifted up here since both tabs are
+  // siblings. AdminTab clears it via onDeepLinkHandled once consumed.
+  const [adminDeepLinkId, setAdminDeepLinkId] = useState(null);
+
+  function openInAdmin(businessId) {
+    setAdminDeepLinkId(businessId);
+    setTab("admin");
+  }
 
   if (!configured) {
     return <Settings onSaved={() => setConfigured(true)} />;
@@ -28,7 +38,13 @@ function App() {
         </button>
       </header>
 
-      {tab === "admin" ? <AdminTab /> : tab === "crm" ? <CrmTab /> : <ClientsTab />}
+      {tab === "admin" ? (
+        <AdminTab deepLinkBusinessId={adminDeepLinkId} onDeepLinkHandled={() => setAdminDeepLinkId(null)} />
+      ) : tab === "crm" ? (
+        <CrmTab onManageInAdmin={openInAdmin} />
+      ) : (
+        <ClientsTab />
+      )}
 
       <nav className="tabbar">
         {TABS.map((t) => (

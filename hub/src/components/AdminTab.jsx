@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { adminApi } from "../lib/adminApi";
+import { supabase, supabaseConfigured } from "../lib/supabaseClient";
 import { SearchStep } from "./admin/SearchStep";
 import { QuickLinkCard } from "./admin/QuickLinkCard";
 import { ContactStep } from "./admin/ContactStep";
@@ -18,11 +19,16 @@ const EMPTY_CONTACT = { name: "", title: "", email: "", phone: "" };
 // flow (PRs #7/#8) into React state, replacing the `S` object + render()
 // with useState. Same admin-api actions, same request/response shapes —
 // see docs/BRANCH_BRIEF-hub-admin-tab.md.
-export function AdminTab() {
+//
+// `deepLinkBusinessId` / `onDeepLinkHandled` let CRM's BusinessDrawer
+// ("Manage in Admin") jump straight into this tab's edit flow for a
+// specific business, bypassing search entirely — see App.jsx.
+export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState([]);
+  const [localHits, setLocalHits] = useState([]); // businesses already on file, matched locally
   const [picked, setPicked] = useState(null);
-  const [existing, setExisting] = useState(null); // {id, name, stage} from lookup_business
+  const [existing, setExisting] = useState(null); // {id, name, stage, google_place_id} from lookup_business
   const [quickLink, setQuickLink] = useState(null); // {business, slug, url} — the walk-in-the-door link
   const [contact, setContact] = useState(EMPTY_CONTACT);
   const [cards, setCards] = useState(DEFAULT_CARDS());
@@ -37,6 +43,7 @@ export function AdminTab() {
   function resetAll() {
     setQuery("");
     setHits([]);
+    setLocalHits([]);
     setPicked(null);
     setExisting(null);
     setQuickLink(null);
@@ -48,8 +55,66 @@ export function AdminTab() {
     setCreateErr("");
   }
 
+  // Shared by every path that finds an existing business (Google-search
+  // pick, local-DB pick, CRM deep link): pre-fill cards from lookup_business
+  // AND now the primary contact, so "adjust contact information" edits what
+  // actually exists instead of offering a blank form that risks duplicating
+  // it (see create_business's find-or-update fix).
+  function applyLookupResult(d) {
+    if (!d?.business) return;
+    setExisting(d.business);
+    if (d.cards?.length) {
+      setCards(d.cards.map((c) => ({ id: c.id, label: c.label, type: c.card_type, price: "" })));
+    }
+    if (d.contact) {
+      setContact({
+        name: d.contact.name || "",
+        title: d.contact.title || "",
+        email: d.contact.email || "",
+        phone: d.contact.phone || "",
+      });
+    }
+  }
+
+  // Step 1 search: local-first. A billed Google Places call is only worth
+  // making when the business genuinely isn't in our own `businesses` table
+  // yet — most "find the business" searches in the field are actually
+  // someone pulling up an existing customer (e.g. to add a card or fix a
+  // phone number), not a new lead. Query our own table first (same
+  // ilike-on-name pattern ClientsTab/CallList already use); only fall
+  // through to Google automatically when there's no local match.
   async function doSearch() {
     if (!query.trim()) return;
+    setBusy(true);
+    setSearchErr("");
+    setHits([]);
+    setLocalHits([]);
+    try {
+      if (supabaseConfigured) {
+        const { data, error } = await supabase
+          .from("businesses")
+          .select("id, name, stage, google_place_id, current_review_count, current_rating")
+          .ilike("name", `%${query.trim()}%`)
+          .order("name")
+          .limit(8);
+        if (!error && data?.length) {
+          setLocalHits(data);
+          setBusy(false);
+          return;
+        }
+      }
+      await searchGoogle();
+      return;
+    } catch (e) {
+      setSearchErr(e.message);
+    }
+    setBusy(false);
+  }
+
+  // The billed Google Places search — called automatically when there's no
+  // local match, and available as an explicit fallback button otherwise (a
+  // genuinely new business, or a local match under a different name).
+  async function searchGoogle() {
     setBusy(true);
     setSearchErr("");
     try {
@@ -61,29 +126,87 @@ export function AdminTab() {
     setBusy(false);
   }
 
-  // Picking a result checks whether this business already has a real
+  // Picking a Google result checks whether this business already has a real
   // row — e.g. a quick demo card already written via linkmaker.html, or
-  // a scraped lead — so Step 3 can pre-fill with what actually exists
-  // instead of offering blank cards that would duplicate an
-  // already-written tag.
+  // a scraped lead — so Step 2/3 can pre-fill with what actually exists
+  // instead of offering blanks that would duplicate already-written data.
   async function pickResult(i) {
     const hit = hits[i];
+    setLocalHits([]);
     setPicked(hit);
     setExisting(null);
     setQuickLink(null);
     setCards(DEFAULT_CARDS());
+    setContact(EMPTY_CONTACT);
     try {
-      const d = await adminApi.lookupBusiness(hit.place_id);
-      if (d.business) {
-        setExisting(d.business);
-        if (d.cards.length) {
-          setCards(d.cards.map((c) => ({ id: c.id, label: c.label, type: c.card_type, price: "" })));
-        }
-      }
+      const d = await adminApi.lookupBusiness({ place_id: hit.place_id });
+      applyLookupResult(d);
     } catch {
-      // lookup is best-effort — silently fall back to blank cards
+      // lookup is best-effort — silently fall back to blank cards/contact
     }
   }
+
+  // Picking a local match ("Already on file") — no Google call at all.
+  // Reuses lookup_business exactly like pickResult, keyed by business_id
+  // when there's no place_id handy (or the row predates one).
+  async function pickLocalResult(biz) {
+    setLocalHits([]);
+    setHits([]);
+    setQuery(biz.name);
+    setPicked({
+      _localId: biz.id,
+      place_id: biz.google_place_id || null,
+      name: biz.name,
+      address: "",
+      review_count: biz.current_review_count ?? 0,
+      rating: biz.current_rating ?? null,
+    });
+    setExisting(null);
+    setQuickLink(null);
+    setCards(DEFAULT_CARDS());
+    setContact(EMPTY_CONTACT);
+    try {
+      const d = await adminApi.lookupBusiness(
+        biz.google_place_id ? { place_id: biz.google_place_id } : { business_id: biz.id },
+      );
+      applyLookupResult(d);
+    } catch {
+      // lookup is best-effort — silently fall back to blank cards/contact
+    }
+  }
+
+  // CRM "Manage in Admin" deep link — same edit flow as a local search pick,
+  // just entered from the other tab with only a business_id in hand.
+  useEffect(() => {
+    if (!deepLinkBusinessId) return;
+    let cancelled = false;
+    (async () => {
+      resetAll();
+      setBusy(true);
+      try {
+        const d = await adminApi.lookupBusiness({ business_id: deepLinkBusinessId });
+        if (!cancelled && d.business) {
+          setQuery(d.business.name);
+          setPicked({
+            place_id: d.business.google_place_id || null,
+            name: d.business.name,
+            address: "",
+            review_count: null,
+            rating: null,
+          });
+          applyLookupResult(d);
+        }
+      } catch (e) {
+        if (!cancelled) setSearchErr(e.message);
+      }
+      if (!cancelled) setBusy(false);
+      onDeepLinkHandled?.();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkBusinessId]);
 
   // The walk-in-the-door link: one working card, right now, before
   // contact info or pricing exist. Reuses the same `businesses` row
@@ -104,13 +227,8 @@ export function AdminTab() {
         type: "stand",
       });
       setQuickLink(d);
-      const look = await adminApi.lookupBusiness(picked.place_id);
-      if (look.business) {
-        setExisting(look.business);
-        if (look.cards.length) {
-          setCards(look.cards.map((c) => ({ id: c.id, label: c.label, type: c.card_type, price: "" })));
-        }
-      }
+      const look = await adminApi.lookupBusiness({ place_id: picked.place_id });
+      applyLookupResult(look);
     } catch (e) {
       setQuickLinkErr(e.message);
     }
@@ -150,11 +268,14 @@ export function AdminTab() {
         query={query}
         setQuery={setQuery}
         hits={hits}
+        localHits={localHits}
         picked={picked}
         busy={busy}
         err={searchErr}
         onSearch={doSearch}
+        onSearchGoogle={searchGoogle}
         onPick={pickResult}
+        onPickLocal={pickLocalResult}
       />
       {picked && (
         <>
@@ -164,7 +285,9 @@ export function AdminTab() {
               to customer.
             </p>
           )}
-          <QuickLinkCard picked={picked} quickLink={quickLink} busy={busy} err={quickLinkErr} onGetLink={getQuickLink} />
+          {picked.place_id && (
+            <QuickLinkCard picked={picked} quickLink={quickLink} busy={busy} err={quickLinkErr} onGetLink={getQuickLink} />
+          )}
           <ContactStep contact={contact} setContact={setContact} />
           <CardsStep cards={cards} setCards={setCards} subtotal={subtotal} busy={busy} err={createErr} onCreate={doCreate} />
         </>

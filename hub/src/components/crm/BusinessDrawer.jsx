@@ -9,7 +9,7 @@ import { FollowUpPicker } from "./FollowUpPicker";
 // activities timeline + any open deals." (contacts included too — it's
 // the natural place for them, and admin-api already writes a contact
 // there on sale.)
-export function BusinessDrawer({ businessId, onClose, onChanged }) {
+export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin }) {
   const [business, setBusiness] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [activities, setActivities] = useState([]);
@@ -54,6 +54,24 @@ export function BusinessDrawer({ businessId, onClose, onChanged }) {
           <>
             <h2>{business.name}</h2>
             <div className="drawer-stage-pill">{STAGE_LABELS[business.stage]}</div>
+
+            {onManageInAdmin ? (
+              // Deep link into Admin's card/contact management for this
+              // same business — no more re-searching Google (or anything)
+              // to get from a CRM card to fixing a phone number or adding
+              // a card. See App.jsx's adminDeepLinkId.
+              <button
+                type="button"
+                className="btn ghost sm"
+                style={{ marginBottom: 14 }}
+                onClick={() => {
+                  onManageInAdmin(business.id);
+                  onClose();
+                }}
+              >
+                Manage in Admin ↗
+              </button>
+            ) : null}
 
             <section>
               <h3>Follow-up</h3>
