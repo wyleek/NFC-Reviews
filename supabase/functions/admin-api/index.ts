@@ -4,7 +4,11 @@
 //
 // Actions:
 //   search_place    { query }            → candidate businesses + place_id + review stats
-//   lookup_business { place_id }         → existing business + its cards, if any (find-before-create)
+//   lookup_business { place_id } | { business_id } → existing business + its cards + primary
+//     contact, if any (find-before-create). Accepts either key so a local
+//     `businesses` row picked straight from the DB (no fresh Google search,
+//     e.g. hub's Admin-tab local-first search or a CRM "Manage in Admin"
+//     deep link) can look itself up by id instead of needing a place_id.
 //   create_business { ...business, cards } → creates/updates business + cards, returns tag URLs
 //   add_competitor  { business_id, place_id, name }
 //   list_businesses {}
@@ -141,13 +145,32 @@ Deno.serve(async (req) => {
       }, { onConflict: "business_id,captured_on" });
     }
 
+    // Find-or-update the existing primary contact instead of always
+    // inserting — mirrors log_pre_call's pattern below. This endpoint used
+    // to insert unconditionally, so re-running the onboarding flow on an
+    // already-existing customer (e.g. to "adjust contact information")
+    // minted a second contacts row instead of editing the real one.
     if (p.contact?.email || p.contact?.phone || p.contact?.name) {
-      await admin.from("contacts").insert({
-        business_id: biz.id,
+      const { data: existingContact } = await admin
+        .from("contacts")
+        .select("id")
+        .eq("business_id", biz.id)
+        .eq("is_primary", true)
+        .maybeSingle();
+
+      const contactFields = {
         name: p.contact.name, title: p.contact.title,
         email: p.contact.email, phone: p.contact.phone,
-        role: "owner", is_primary: true,
-      });
+      };
+
+      const { error: contactErr } = existingContact
+        ? await admin.from("contacts").update(contactFields).eq("id", existingContact.id)
+        : await admin.from("contacts").insert({
+            business_id: biz.id,
+            ...contactFields,
+            role: "owner", is_primary: true,
+          });
+      if (contactErr) return json({ error: contactErr.message }, 400);
     }
 
     // Cards carrying an `id` are ones already written and possibly tapped
@@ -213,18 +236,33 @@ Deno.serve(async (req) => {
   // lead, or one linkmaker already made a quick demo card for), Step 3 can
   // pre-fill with its real existing card(s) instead of offering fresh blanks
   // that would duplicate whatever's already been physically written.
+  //
+  // Also accepts `business_id` (instead of `place_id`) — added so a business
+  // picked straight from a local-DB match (hub's Admin-tab local-first
+  // search, or a "Manage in Admin" deep link from the CRM board) can be
+  // looked up even when it has no google_place_id handy client-side yet, or
+  // (rarely) no google_place_id at all. And now also returns the existing
+  // primary contact, if any, so Step 2 (ContactStep) can pre-fill real
+  // contact info instead of offering a blank form that risks re-entering
+  // (and, pre-fix, duplicating) data that's already on file.
   if (action === "lookup_business") {
-    const { data: biz } = await admin
-      .from("businesses").select("id, name, stage")
-      .eq("google_place_id", p.place_id).maybeSingle();
-    if (!biz) return json({ business: null, cards: [] });
+    const { data: biz } = p.business_id
+      ? await admin.from("businesses").select("id, name, stage, google_place_id")
+          .eq("id", p.business_id).maybeSingle()
+      : await admin.from("businesses").select("id, name, stage, google_place_id")
+          .eq("google_place_id", p.place_id).maybeSingle();
+    if (!biz) return json({ business: null, cards: [], contact: null });
 
     const { data: cards } = await admin
       .from("cards").select("id, label, card_type, slug")
       .eq("business_id", biz.id).order("created_at");
+    const { data: contact } = await admin
+      .from("contacts").select("id, name, title, email, phone")
+      .eq("business_id", biz.id).eq("is_primary", true).maybeSingle();
     return json({
       business: biz,
       cards: (cards ?? []).map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
+      contact: contact ?? null,
     });
   }
 

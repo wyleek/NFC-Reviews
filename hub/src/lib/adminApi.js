@@ -41,7 +41,11 @@ export const adminApi = {
   // Admin tab
   searchPlace: (query) => call("search_place", { query }),
 
-  lookupBusiness: (place_id) => call("lookup_business", { place_id }),
+  // Accepts { place_id } (a fresh Google search result) or { business_id }
+  // (a local-DB match, or a CRM "Manage in Admin" deep link, that may not
+  // have a place_id on hand client-side) — see lookup_business in
+  // supabase/functions/admin-api/index.ts.
+  lookupBusiness: ({ place_id, business_id } = {}) => call("lookup_business", { place_id, business_id }),
 
   quickLink: ({ place_id, name, review_count, rating, label, type }) =>
     call("quick_link", { place_id, name, review_count, rating, label, type }),
