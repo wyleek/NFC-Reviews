@@ -70,4 +70,31 @@ export const adminApi = {
 
   scheduleMessage: (business_id, body, send_at) =>
     call("schedule_message", { business_id, body, send_at }),
+
+  // CRM drawer — full inline editor (contacts/deals/activity/cards), added
+  // to finish merging Admin's edit capabilities into the CRM drawer itself
+  // rather than only deep-linking out to the Admin tab.
+  addContact: ({ business_id, name, title, email, phone, role }) =>
+    call("add_contact", { business_id, name, title, email, phone, role }),
+
+  updateContact: ({ id, name, title, email, phone }) =>
+    call("update_contact", { id, name, title, email, phone }),
+
+  deleteContact: (id) => call("delete_contact", { id }),
+
+  // Deal "update" is just upsert_deal with an id — see admin-api's
+  // docstring for why there's no separate update_deal action.
+  updateDeal: (deal) => call("upsert_deal", deal),
+
+  deleteDeal: (id) => call("delete_deal", { id }),
+
+  deleteActivity: (id) => call("delete_activity", { id }),
+
+  addCard: ({ business_id, label, card_type }) =>
+    call("add_card", { business_id, label, card_type }),
+
+  updateCard: ({ id, label, card_type, active }) =>
+    call("update_card", { id, label, card_type, active }),
+
+  deleteCard: (id) => call("delete_card", { id }),
 };

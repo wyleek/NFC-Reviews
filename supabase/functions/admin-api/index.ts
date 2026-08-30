@@ -12,6 +12,15 @@
 //   create_business { ...business, cards } → creates/updates business + cards, returns tag URLs
 //   add_competitor  { business_id, place_id, name }
 //   list_businesses {}
+//   add_card    { business_id, label, card_type? } → find-or-create by
+//     business_id+label, same dedup pattern as create_business's card
+//     upsert (reused verbatim, not reinvented) — for adding one more card
+//     to a business that already exists, outside the create_business wizard.
+//   update_card { id, label?, card_type?, active? }
+//   delete_card { id } → soft delete (active=false), NOT a hard delete —
+//     cards.id cascades to `taps`, and redirect/index.ts already treats an
+//     inactive card as retired (falls back), so this preserves tap history
+//     for a card that may still be physically out there.
 //
 // CRM pipeline board actions (feature/crm-pipeline-board) — reads go
 // straight from the client via the anon key + RLS (see
@@ -20,6 +29,19 @@
 //   update_stage    { business_id, stage }
 //   log_activity    { business_id, type, body?, metadata? }
 //   upsert_deal     { id?, business_id, product_sku?, amount?, is_trial?, trial_start?, trial_end?, status? }
+//     — also serves as "update_deal": pass `id` for an existing deal, full
+//     current fields plus the edited one(s). The CRM drawer's deal editor
+//     reuses this action rather than a parallel update_deal (same shape,
+//     same insert-vs-update-by-id branch already handles both).
+//   delete_deal     { id }
+//   add_contact     { business_id, name?, title?, email?, phone?, role? }
+//     → is_primary=true only if this is the business's first contact.
+//   update_contact  { id, name?, title?, email?, phone? }
+//   delete_contact  { id } → if the deleted contact was primary and others
+//     remain, promotes the next-oldest to primary so callers that look up
+//     "the primary contact" (create_business, log_pre_call) keep working.
+//   delete_activity { id } — activities stay append-only otherwise; this is
+//     "editing an entry out", not rewriting its text.
 //   set_sms_consent { business_id, consent }        → only path allowed to set sms_consent=true (crm-spec.md 2c)
 //   schedule_message{ business_id, body, send_at }  → 400 unless businesses.sms_consent is true
 //   log_pre_call    { business_id, contact_name?, dm_days?, dm_window?, disqualifier? }
@@ -337,6 +359,55 @@ Deno.serve(async (req) => {
     return json({ business: biz, slug, url: tapUrl(slug) });
   }
 
+  // -------------------------------------------------- card management (CRM)
+  // For an already-existing business (CRM drawer's Cards section), outside
+  // create_business's full onboarding wizard. add_card reuses the exact
+  // upsert-by-label-and-business_id dedup pattern create_business's card
+  // loop uses (see above) — a double-tap of "Add card" reuses the row
+  // instead of minting a duplicate, same protection, not reinvented.
+  if (action === "add_card") {
+    const { data: biz, error: bErr } = await admin
+      .from("businesses").select("id, name").eq("id", p.business_id).maybeSingle();
+    if (bErr) return json({ error: bErr.message }, 400);
+    if (!biz) return json({ error: "business not found" }, 404);
+
+    const label = p.label || "Card";
+    const { data: existingCard } = await admin
+      .from("cards").select("id, label, card_type, slug, active")
+      .eq("business_id", biz.id).eq("label", label)
+      .order("created_at").limit(1).maybeSingle();
+    if (existingCard) {
+      return json({ card: { ...existingCard, url: tapUrl(existingCard.slug) } });
+    }
+
+    const slug = `${slugify(biz.name)}-${slugify(label) || "card"}-${rand()}`;
+    const { data: card, error: cErr } = await admin.from("cards").insert({
+      business_id: biz.id, slug, label, card_type: p.card_type || "stand", destination: "google",
+    }).select().single();
+    if (cErr) return json({ error: cErr.message }, 400);
+    return json({ card: { ...card, url: tapUrl(card.slug) } });
+  }
+
+  if (action === "update_card") {
+    const fields: Record<string, unknown> = {};
+    if (p.label !== undefined) fields.label = p.label;
+    if (p.card_type !== undefined) fields.card_type = p.card_type;
+    if (p.active !== undefined) fields.active = Boolean(p.active);
+    const { data: card, error } = await admin
+      .from("cards").update(fields).eq("id", p.id).select().single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ card: { ...card, url: tapUrl(card.slug) } });
+  }
+
+  // Soft delete only — see docstring at the top of the file for why (taps
+  // FK-cascade + redirect/index.ts already retires an inactive card).
+  if (action === "delete_card") {
+    const { data: card, error } = await admin
+      .from("cards").update({ active: false }).eq("id", p.id).select().single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ card });
+  }
+
   // ============================================================ CRM board
   const STAGES = [
     "scraped", "qualified", "pre_called", "visit_planned", "rescheduled",
@@ -385,6 +456,15 @@ Deno.serve(async (req) => {
     return json({ activity: data });
   }
 
+  // ------------------------------------------------------------ delete_activity
+  // Activities stay append-only per crm-spec.md — "editing" one out of the
+  // timeline means removing the entry, never rewriting its text in place.
+  if (action === "delete_activity") {
+    const { error } = await admin.from("activities").delete().eq("id", p.id);
+    if (error) return json({ error: error.message }, 400);
+    return json({ ok: true });
+  }
+
   // -------------------------------------------------------------- upsert_deal
   if (action === "upsert_deal") {
     const fields = {
@@ -401,6 +481,67 @@ Deno.serve(async (req) => {
       : await admin.from("deals").insert(fields).select().single();
     if (error) return json({ error: error.message }, 400);
     return json({ deal: data });
+  }
+
+  // update_deal is deliberately NOT a separate action — see the docstring at
+  // the top of the file. The drawer's deal editor calls upsert_deal with the
+  // deal's `id` plus its (edited) fields.
+
+  if (action === "delete_deal") {
+    const { error } = await admin.from("deals").delete().eq("id", p.id);
+    if (error) return json({ error: error.message }, 400);
+    return json({ ok: true });
+  }
+
+  // --------------------------------------------------------- contact CRUD
+  // Full contact management for the CRM drawer — add_contact/update_contact/
+  // delete_contact. create_business and log_pre_call above still do their
+  // own find-or-update-the-primary-contact thing on their own paths; these
+  // are the general-purpose actions for "manage every contact on this
+  // business" from the drawer, including businesses with several contacts.
+  if (action === "add_contact") {
+    const { count } = await admin
+      .from("contacts").select("id", { count: "exact", head: true }).eq("business_id", p.business_id);
+    const { data, error } = await admin.from("contacts").insert({
+      business_id: p.business_id,
+      name: p.name ?? null,
+      title: p.title ?? null,
+      email: p.email ?? null,
+      phone: p.phone ?? null,
+      role: p.role ?? null,
+      is_primary: (count ?? 0) === 0,
+    }).select().single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ contact: data });
+  }
+
+  if (action === "update_contact") {
+    const fields: Record<string, unknown> = {};
+    for (const k of ["name", "title", "email", "phone"]) {
+      if (p[k] !== undefined) fields[k] = p[k];
+    }
+    const { data, error } = await admin
+      .from("contacts").update(fields).eq("id", p.id).select().single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ contact: data });
+  }
+
+  if (action === "delete_contact") {
+    const { data: toDelete } = await admin
+      .from("contacts").select("id, business_id, is_primary").eq("id", p.id).maybeSingle();
+    const { error } = await admin.from("contacts").delete().eq("id", p.id);
+    if (error) return json({ error: error.message }, 400);
+
+    // Keep "the primary contact" meaningful for create_business/log_pre_call
+    // — if the one just deleted was primary and others remain, promote the
+    // next-oldest instead of leaving the business with no primary contact.
+    if (toDelete?.is_primary) {
+      const { data: next } = await admin
+        .from("contacts").select("id").eq("business_id", toDelete.business_id)
+        .order("created_at").limit(1).maybeSingle();
+      if (next) await admin.from("contacts").update({ is_primary: true }).eq("id", next.id);
+    }
+    return json({ ok: true });
   }
 
   // ---------------------------------------------------------- sms_consent
