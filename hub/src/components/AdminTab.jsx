@@ -6,6 +6,7 @@ import { QuickLinkCard } from "./admin/QuickLinkCard";
 import { ContactStep } from "./admin/ContactStep";
 import { CardsStep } from "./admin/CardsStep";
 import { TagsResult } from "./admin/TagsResult";
+import { ContactsEditor } from "./shared/ContactsEditor";
 
 const DEFAULT_CARDS = () => [
   { label: "Front counter", type: "stand", price: "" },
@@ -30,12 +31,14 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
   const [picked, setPicked] = useState(null);
   const [existing, setExisting] = useState(null); // {id, name, stage, google_place_id} from lookup_business
   const [quickLink, setQuickLink] = useState(null); // {business, slug, url} — the walk-in-the-door link
-  const [contact, setContact] = useState(EMPTY_CONTACT);
+  const [contact, setContact] = useState(EMPTY_CONTACT); // brand-new-business path only, see ContactStep below
+  const [contacts, setContacts] = useState([]); // existing-business path — live multi-contact editor
   const [cards, setCards] = useState(DEFAULT_CARDS());
   const [created, setCreated] = useState(null);
   const [busy, setBusy] = useState(false);
   const [searchErr, setSearchErr] = useState("");
   const [quickLinkErr, setQuickLinkErr] = useState("");
+  const [contactErr, setContactErr] = useState("");
   const [createErr, setCreateErr] = useState("");
 
   const subtotal = cards.reduce((sum, c) => sum + (parseFloat(c.price) || 0), 0);
@@ -48,24 +51,29 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setExisting(null);
     setQuickLink(null);
     setContact(EMPTY_CONTACT);
+    setContacts([]);
     setCards(DEFAULT_CARDS());
     setCreated(null);
     setSearchErr("");
     setQuickLinkErr("");
+    setContactErr("");
     setCreateErr("");
   }
 
   // Shared by every path that finds an existing business (Google-search
   // pick, local-DB pick, CRM deep link): pre-fill cards from lookup_business
-  // AND now the primary contact, so "adjust contact information" edits what
+  // AND now the contact(s), so "adjust contact information" edits what
   // actually exists instead of offering a blank form that risks duplicating
-  // it (see create_business's find-or-update fix).
+  // it (see create_business's find-or-update fix). `contacts` (plural)
+  // feeds the live multi-contact editor shown for an existing business —
+  // see the `existing` branch below, and ContactsEditor.
   function applyLookupResult(d) {
     if (!d?.business) return;
     setExisting(d.business);
     if (d.cards?.length) {
       setCards(d.cards.map((c) => ({ id: c.id, label: c.label, type: c.card_type, price: "" })));
     }
+    setContacts(d.contacts ?? (d.contact ? [d.contact] : []));
     if (d.contact) {
       setContact({
         name: d.contact.name || "",
@@ -73,6 +81,19 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
         email: d.contact.email || "",
         phone: d.contact.phone || "",
       });
+    }
+  }
+
+  // Re-fetches this business's contacts after ContactsEditor adds/removes a
+  // row (an inline field edit doesn't need this — local state already has
+  // it, see ContactsEditor's onSaved vs onListChanged split).
+  async function reloadExistingContacts() {
+    if (!existing?.id) return;
+    try {
+      const d = await adminApi.lookupBusiness({ business_id: existing.id });
+      setContacts(d.contacts ?? []);
+    } catch (e) {
+      setContactErr(e.message);
     }
   }
 
@@ -138,6 +159,7 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setQuickLink(null);
     setCards(DEFAULT_CARDS());
     setContact(EMPTY_CONTACT);
+    setContacts([]);
     try {
       const d = await adminApi.lookupBusiness({ place_id: hit.place_id });
       applyLookupResult(d);
@@ -165,6 +187,7 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setQuickLink(null);
     setCards(DEFAULT_CARDS());
     setContact(EMPTY_CONTACT);
+    setContacts([]);
     try {
       const d = await adminApi.lookupBusiness(
         biz.google_place_id ? { place_id: biz.google_place_id } : { business_id: biz.id },
@@ -244,7 +267,12 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
         place_id: picked.place_id,
         review_count: picked.review_count,
         rating: picked.rating,
-        contact,
+        // For an existing business, contact edits already went straight
+        // through ContactsEditor (live, on blur) — sending the `contact`
+        // snapshot here too would overwrite whatever's live on the primary
+        // row with however it looked at lookup time. Only the brand-new
+        // path (ContactStep) needs create_business to write the contact.
+        contact: existing ? null : contact,
         cards: cards.filter((c) => c.label.trim()),
       });
       setCreated(d);
@@ -285,10 +313,35 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
               to customer.
             </p>
           )}
-          {picked.place_id && (
+          {picked.place_id && existing?.stage !== "customer" && (
+            // "Get a link now" is the walk-in-the-door CTA for a fresh
+            // prospect — it doesn't make sense once someone already has
+            // cards. Leads (any other stage) still see it: they're in the
+            // system but haven't been sold yet, so a quick link is still
+            // useful in the field.
             <QuickLinkCard picked={picked} quickLink={quickLink} busy={busy} err={quickLinkErr} onGetLink={getQuickLink} />
           )}
-          <ContactStep contact={contact} setContact={setContact} />
+          {existing ? (
+            // Already a real row — edit contacts live, same component and
+            // save-on-blur behavior as the CRM drawer (BusinessDrawer.jsx),
+            // instead of the single-contact form below that only persists
+            // once "Create" is clicked. See ContactsEditor.
+            <div className="card">
+              <div className="step">Step 2</div>
+              <h2>Who to reach</h2>
+              <p className="sub">Already on file — edits save immediately, same as the CRM drawer.</p>
+              {contactErr && <div className="err">{contactErr}</div>}
+              <ContactsEditor
+                businessId={existing.id}
+                contacts={contacts}
+                setContacts={setContacts}
+                onListChanged={reloadExistingContacts}
+                onError={setContactErr}
+              />
+            </div>
+          ) : (
+            <ContactStep contact={contact} setContact={setContact} />
+          )}
           <CardsStep cards={cards} setCards={setCards} subtotal={subtotal} busy={busy} err={createErr} onCreate={doCreate} />
         </>
       )}
