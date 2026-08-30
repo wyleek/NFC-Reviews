@@ -22,7 +22,7 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <span className="brand">Tap2Review</span>
+        <span className="brand">WM Marketing</span>
         <button type="button" className="btn ghost sm" onClick={() => setConfigured(false)}>
           Settings
         </button>

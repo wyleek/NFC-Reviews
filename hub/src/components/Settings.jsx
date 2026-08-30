@@ -21,7 +21,7 @@ export function Settings({ onSaved }) {
   return (
     <div className="settings-gate">
       <form className="settings-form" onSubmit={save}>
-        <h1>Tap2Review</h1>
+        <h1>WM Marketing</h1>
         <p className="sub">Enter these once — stored only in this browser.</p>
         <label>
           Admin function URL

@@ -1,4 +1,4 @@
-# Tap2Review — deployed Supabase backend
+# WM Marketing — deployed Supabase backend
 
 This directory is the deployed source of truth for the `feature/console-live-data`
 branch. It supersedes `tap2review-backend.zip` at the repo root (kept for
