@@ -71,7 +71,7 @@ export function OutcomeButtons({ business, onDone }) {
       <div className="consent-confirm">
         <p>
           Starting a trial requires SMS opt-in consent (crm-spec.md 2c) —
-          confirm <strong>{business.name}</strong> has agreed to receive texts from Tap2Review.
+          confirm <strong>{business.name}</strong> has agreed to receive texts from WM Marketing.
         </p>
         {error ? <p className="outcome-error">{error}</p> : null}
         <div className="consent-actions">

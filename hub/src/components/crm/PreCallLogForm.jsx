@@ -6,9 +6,17 @@ const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // lead-engine-spec.md §5.2 — exactly the 4 things the pre-call block logs,
 // nothing more. This is not a sales call; keep the form as fast as the
 // call itself (~65s including no-answers, per §5.3).
+//
+// Availability used to be a single free-text "time window" note. The Call
+// List now sorts earliest-to-latest, which needs a real time — so this
+// captures a required start time (dm_window_start) and optional end time
+// (dm_window_end), and keeps the free-text field around as an optional
+// extra note (dm_window) rather than the primary way to record timing.
 export function PreCallLogForm({ business, onLogged, onCancel }) {
   const [contactName, setContactName] = useState("");
   const [dmDays, setDmDays] = useState([]);
+  const [windowStart, setWindowStart] = useState("");
+  const [windowEnd, setWindowEnd] = useState("");
   const [dmWindow, setDmWindow] = useState("");
   const [disqualifier, setDisqualifier] = useState("");
   const [busy, setBusy] = useState(false);
@@ -20,12 +28,23 @@ export function PreCallLogForm({ business, onLogged, onCancel }) {
 
   async function submit(e) {
     e.preventDefault();
-    setBusy(true);
     setError(null);
+
+    // dm_window_start is required for the row to land in a scheduled
+    // (rather than "Unscheduled") group in the Call List — unless the
+    // call turned up a disqualifier, in which case timing is moot.
+    if (!windowStart && !disqualifier.trim()) {
+      setError("Available-from time is required (or log a disqualifier instead).");
+      return;
+    }
+
+    setBusy(true);
     try {
       await adminApi.logPreCall(business.id, {
         contact_name: contactName.trim() || undefined,
         dm_days: dmDays.length ? dmDays : undefined,
+        dm_window_start: windowStart || undefined,
+        dm_window_end: windowEnd || undefined,
         dm_window: dmWindow.trim() || undefined,
         disqualifier: disqualifier.trim() || undefined,
       });
@@ -56,9 +75,24 @@ export function PreCallLogForm({ business, onLogged, onCancel }) {
           </button>
         ))}
       </div>
+      <div className="precall-window">
+        <label>
+          Available from
+          <input
+            type="time"
+            value={windowStart}
+            onChange={(e) => setWindowStart(e.target.value)}
+            required={!disqualifier.trim()}
+          />
+        </label>
+        <label>
+          Until (optional)
+          <input type="time" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} />
+        </label>
+      </div>
       <label>
-        Time window
-        <input value={dmWindow} onChange={(e) => setDmWindow(e.target.value)} placeholder="Mornings before 10" />
+        Note (optional — extra detail beyond the time window)
+        <input value={dmWindow} onChange={(e) => setDmWindow(e.target.value)} placeholder="e.g. call the back line, not the front counter" />
       </label>
       <label>
         Disqualifier (optional — sets do-not-contact)

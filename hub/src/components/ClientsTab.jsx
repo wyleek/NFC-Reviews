@@ -100,8 +100,14 @@ export function ClientsTab() {
         // Fall back to the durable count on `businesses` (kept in sync by
         // sync-reviews) when there's no snapshot history yet.
         const current = asOfToday?.review_count ?? b.current_review_count ?? 0;
-        const as14 = snapshotAsOf(snaps, key14)?.review_count ?? current;
-        const as30 = snapshotAsOf(snaps, key30)?.review_count ?? current;
+        // If no snapshot exists 14/30 days back (business hasn't been tracked
+        // that long), fall back to the earliest snapshot we do have rather
+        // than `current` — otherwise a young, fast-growing business looks
+        // like zero change instead of showing its real growth since first
+        // tracked.
+        const earliest = snaps[0]?.review_count ?? current;
+        const as14 = snapshotAsOf(snaps, key14)?.review_count ?? earliest;
+        const as30 = snapshotAsOf(snaps, key30)?.review_count ?? earliest;
         const gained14 = current - as14;
         const gained30 = current - as30;
 

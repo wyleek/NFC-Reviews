@@ -49,11 +49,33 @@ function writeReviewUrl(placeId: string): string {
   return `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}`;
 }
 
-function redirect(url: string): Response {
-  return new Response(null, {
-    status: 302,
-    headers: { Location: url, "Cache-Control": "no-store" },
-  });
+// Standard first-party session cookie used to dedup repeat scans from the
+// same device — the same mechanism GA/Plausible/etc. use for this exact
+// purpose. 1 year expiry, HttpOnly (never read client-side), Secure+Lax.
+const DEVICE_COOKIE = "t2r_did";
+const DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+
+function deviceIdFromCookie(req: Request): string | null {
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  for (const part of cookieHeader.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (rawName === DEVICE_COOKIE) {
+      const value = rawValue.join("=").trim();
+      return value || null;
+    }
+  }
+  return null;
+}
+
+function redirect(url: string, deviceId?: string): Response {
+  const headers = new Headers({ Location: url, "Cache-Control": "no-store" });
+  if (deviceId) {
+    headers.append(
+      "Set-Cookie",
+      `${DEVICE_COOKIE}=${deviceId}; Max-Age=${DEVICE_COOKIE_MAX_AGE}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    );
+  }
+  return new Response(null, { status: 302, headers });
 }
 
 Deno.serve(async (req) => {
@@ -62,8 +84,13 @@ Deno.serve(async (req) => {
   const parts = url.pathname.split("/").filter(Boolean);
   const slug = parts[parts.length - 1];
 
+  // First-party device id: echo the existing t2r_did cookie or mint a new
+  // one. Set on every response (not just successful taps) so the visitor
+  // carries a stable id from their very first scan onward.
+  const deviceId = deviceIdFromCookie(req) ?? crypto.randomUUID();
+
   if (!slug || slug === "redirect" || slug === "r") {
-    return redirect(FALLBACK_URL);
+    return redirect(FALLBACK_URL, deviceId);
   }
 
   // Look up the card + its business (fast, indexed on slug).
@@ -74,7 +101,7 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   if (error) console.error("card lookup error", error);
-  if (!card || !card.active) return redirect(FALLBACK_URL);
+  if (!card || !card.active) return redirect(FALLBACK_URL, deviceId);
 
   // Resolve the final Google destination.
   // @ts-ignore nested select
@@ -93,6 +120,28 @@ Deno.serve(async (req) => {
       req.headers.get("x-country") ??
       null;
 
+    // Dedup scope: per business, per UTC calendar day. A device tapping two
+    // different cards at the same business on the same day still counts as
+    // one visitor — only the first tap of the day is is_repeat=false.
+    const now = new Date();
+    const dayStart = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+    ));
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    const { data: existingTap, error: existingTapError } = await admin
+      .from("taps")
+      .select("id")
+      .eq("device_id", deviceId)
+      .eq("business_id", card.business_id)
+      .gte("created_at", dayStart.toISOString())
+      .lt("created_at", dayEnd.toISOString())
+      .limit(1)
+      .maybeSingle();
+    if (existingTapError) console.error("tap dedup lookup failed", existingTapError);
+
     const { error: tapError } = await admin.from("taps").insert({
       card_id: card.id,
       business_id: card.business_id,
@@ -100,13 +149,15 @@ Deno.serve(async (req) => {
       os,
       country,
       referer: req.headers.get("referer"),
+      device_id: deviceId,
+      is_repeat: !!existingTap,
     });
     if (tapError) console.error("tap insert failed", tapError);
   }
 
   // Send them onward — same destination for everyone on this card.
   if (card.destination === "hub" && HUB_BASE_URL) {
-    return redirect(`${HUB_BASE_URL}/${slug}`);
+    return redirect(`${HUB_BASE_URL}/${slug}`, deviceId);
   }
-  return redirect(googleUrl);
+  return redirect(googleUrl, deviceId);
 });

@@ -65,8 +65,8 @@ export const adminApi = {
 
   setSmsConsent: (business_id, consent) => call("set_sms_consent", { business_id, consent }),
 
-  logPreCall: (business_id, { contact_name, dm_days, dm_window, disqualifier }) =>
-    call("log_pre_call", { business_id, contact_name, dm_days, dm_window, disqualifier }),
+  logPreCall: (business_id, { contact_name, dm_days, dm_window, dm_window_start, dm_window_end, disqualifier }) =>
+    call("log_pre_call", { business_id, contact_name, dm_days, dm_window, dm_window_start, dm_window_end, disqualifier }),
 
   scheduleMessage: (business_id, body, send_at) =>
     call("schedule_message", { business_id, body, send_at }),
@@ -97,4 +97,7 @@ export const adminApi = {
     call("update_card", { id, label, card_type, active }),
 
   deleteCard: (id) => call("delete_card", { id }),
+
+  // Call List quick-add — search_place + this is the whole flow (no wizard).
+  addLead: (place_id, name) => call("add_lead", { place_id, name }),
 };
