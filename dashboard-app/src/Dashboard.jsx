@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, BarChart, Cell,
 } from "recharts";
 import {
-  ChevronRight, Smartphone, Zap, Check, Calendar, ArrowUpRight,
+  ChevronRight, Smartphone, Zap, Check, Calendar,
   Lightbulb, X,
 } from "lucide-react";
 
@@ -212,9 +212,9 @@ function useBusinessData(businessId) {
   return state;
 }
 
-// Raw taps for [priorStart, rangeEnd] — enough to derive the current period,
-// the prior period (for delta arrows), the per-card breakdown, device split,
-// and hourly split, all from one query.
+// Raw taps for [priorStart, rangeEnd] — priorStart back-fills enough history
+// for accurate snapshot forward-filling, while the current-period rows drive
+// the per-card breakdown, device split, and hourly split, all from one query.
 function useTaps(businessId, priorStart, rangeEnd) {
   const [state, setState] = useState({ loading: true, taps: [] });
 
@@ -227,6 +227,7 @@ function useTaps(businessId, priorStart, rangeEnd) {
         .from("taps")
         .select("card_id, device_type, created_at")
         .eq("business_id", businessId)
+        .eq("is_repeat", false)
         .gte("created_at", priorStart.toISOString())
         .lt("created_at", addDays(rangeEnd, 1).toISOString());
       if (!cancelled) setState({ loading: false, taps: data ?? [] });
@@ -303,7 +304,6 @@ export default function Dashboard() {
   }, [allDays, dayIndex, taps]);
 
   const data = useMemo(() => bucketed.filter((r) => r.d >= rangeStart), [bucketed, rangeStart]);
-  const priorData = useMemo(() => bucketed.filter((r) => r.d < rangeStart), [bucketed, rangeStart]);
 
   const days = data.length || 1;
   const tapsInRange = data.reduce((s, d) => s + d.taps, 0);
@@ -311,10 +311,6 @@ export default function Dashboard() {
   const revEnd = data[data.length - 1]?.reviews ?? revStart;
   const revGained = revStart != null && revEnd != null ? revEnd - revStart : 0;
 
-  const priorTaps = priorData.reduce((s, d) => s + d.taps, 0);
-
-  const pct = (now, before) => (!before ? null : Math.round(((now - before) / before) * 100));
-  const tapDelta = pct(tapsInRange, priorTaps);
   const velocity = (revGained / days) * 30;
 
   const label = custom
@@ -357,18 +353,11 @@ export default function Dashboard() {
   // Each stat gets its own rounded Panel instead of one panel sliced up with
   // divide-x — a Tailwind divide-x border defaults to a hard black line with
   // no color override, which read as a stray hard rule between everything.
-  const Metric = ({ label: l, value, delta, sub }) => (
+  const Metric = ({ label: l, value, sub }) => (
     <Panel className="flex-1 min-w-[160px] px-6 py-6">
       <div className="text-[11px] uppercase tracking-[0.1em] mb-3" style={{ color: MUTED }}>{l}</div>
       <div className="flex items-end gap-2.5">
         <div className="text-[46px] leading-[0.9] font-bold tabular-nums tracking-tight" style={{ color: INK }}>{value}</div>
-        {delta != null && (
-          <div className="flex items-center gap-0.5 text-[13px] font-semibold mb-1.5"
-               style={{ color: delta >= 0 ? "#1a7f4b" : "#c0392b" }}>
-            <ArrowUpRight size={14} style={{ transform: delta >= 0 ? "none" : "rotate(90deg)" }} />
-            {Math.abs(delta)}%
-          </div>
-        )}
       </div>
       {sub && <div className="text-[12px] mt-2.5" style={{ color: MUTED }}>{sub}</div>}
     </Panel>
@@ -414,7 +403,7 @@ export default function Dashboard() {
       <div className="border-b bg-white sticky top-0 z-20" style={{ borderColor: LINE }}>
         <div className="max-w-[1080px] mx-auto px-6 h-14 flex items-center gap-2">
           <Zap size={16} style={{ color: ACCENT }} />
-          <span className="text-[14px] font-semibold tracking-tight" style={{ color: INK }}>Tap2Review</span>
+          <span className="text-[14px] font-semibold tracking-tight" style={{ color: INK }}>WM Marketing</span>
         </div>
       </div>
 
@@ -428,7 +417,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="relative" ref={wrapRef}>
+          <div className="relative ml-auto" ref={wrapRef}>
             <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#f5f6f8" }}>
               {[7, 30, 60].map((r) => {
                 const on = !custom && range === r;
@@ -443,8 +432,8 @@ export default function Dashboard() {
               })}
               <button onClick={() => setShowCal(!showCal)}
                 className="px-3 py-1.5 text-[13px] rounded-md transition flex items-center gap-1.5"
-                style={{ background: custom ? "#fff" : "transparent", color: custom ? INK : MUTED,
-                         fontWeight: custom ? 600 : 400, boxShadow: custom ? "0 1px 2px rgba(0,0,0,.06)" : "none" }}>
+                style={{ background: custom || showCal ? "#fff" : "transparent", color: custom || showCal ? INK : MUTED,
+                         fontWeight: custom || showCal ? 600 : 400, boxShadow: custom || showCal ? "0 1px 2px rgba(0,0,0,.06)" : "none" }}>
                 <Calendar size={13} /> {custom ? label : "Custom"}
                 {custom && <X size={12} onClick={(e) => { e.stopPropagation(); setCustom(null); }} />}
               </button>
@@ -455,7 +444,7 @@ export default function Dashboard() {
         </div>
 
         <div className="flex flex-wrap gap-3 mb-3">
-          <Metric label="Taps" value={tapsInRange.toLocaleString()} delta={tapDelta} sub={`${label.toLowerCase()} · ${(tapsInRange / days).toFixed(1)}/day`} />
+          <Metric label="Taps" value={tapsInRange.toLocaleString()} sub={`${label.toLowerCase()} · ${(tapsInRange / days).toFixed(1)}/day`} />
           <Metric label="Google reviews" value={revEnd ?? "—"} sub={revStart != null ? `${revStart} at start of period` : "no snapshots yet"} />
           <Metric label="Reviews gained" value={revGained} sub={label.toLowerCase()} />
           <Metric label="Star rating" value={business.current_rating ?? "—"} sub="Google average" />
@@ -474,7 +463,7 @@ export default function Dashboard() {
               <CartesianGrid vertical={false} stroke={LINE} />
               <XAxis dataKey="date" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(days / 6))} />
               <YAxis yAxisId="l" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="r" orientation="right" domain={['dataMin - 1', 'dataMax + 1']} tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
               <Tooltip content={<Tip />} cursor={{ fill: "#f7f8fa" }} />
               <Bar yAxisId="l" dataKey="taps" name="Taps" fill={SOFT} radius={[3, 3, 0, 0]} maxBarSize={18} />
               <Line yAxisId="r" dataKey="reviews" name="Total reviews" stroke={ACCENT} strokeWidth={2} dot={false} connectNulls />
