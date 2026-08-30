@@ -691,8 +691,21 @@ Deno.serve(async (req) => {
         google_place_id: p.place_id,
         stage: "qualified",
       }).select().single();
-      if (error) return json({ error: error.message }, 400);
-      biz = made;
+      if (error) {
+        // 23505 = unique_violation. Someone else (a double-click before the
+        // button disabled, or two lines of a batch-add resolving to the
+        // same place) inserted this place_id between our SELECT and this
+        // INSERT. Don't fail the request over a race — just fetch what's
+        // there now and continue as if we'd found it in the first place.
+        if (error.code !== "23505") return json({ error: error.message }, 400);
+        const { data: raced } = await admin
+          .from("businesses").select()
+          .eq("google_place_id", p.place_id).maybeSingle();
+        if (!raced) return json({ error: error.message }, 400);
+        biz = raced;
+      } else {
+        biz = made;
+      }
     }
 
     // Insert-or-update the primary contact, same pattern as log_pre_call.
