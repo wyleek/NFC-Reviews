@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { adminApi } from "../../lib/adminApi";
 import { CALL_LIST_STAGES, STAGE_LABELS } from "../../lib/stages";
@@ -88,6 +88,10 @@ export function CallList({ search = "" }) {
   const [addQuery, setAddQuery] = useState("");
   const [addHits, setAddHits] = useState([]);
   const [addBusy, setAddBusy] = useState(false);
+  // Synchronous guard alongside addBusy — React's `disabled` doesn't apply
+  // until the next render, so two fast clicks/Enter-presses can both slip
+  // through before the button actually disables. A ref updates immediately.
+  const addInFlight = useRef(false);
   const [addErr, setAddErr] = useState("");
 
   // Batch-add: paste a list of names (one per line), each run through the
@@ -163,6 +167,8 @@ export function CallList({ search = "" }) {
   }
 
   async function pickAddResult(hit) {
+    if (addInFlight.current) return;
+    addInFlight.current = true;
     setAddBusy(true);
     setAddErr("");
     try {
@@ -173,6 +179,7 @@ export function CallList({ search = "" }) {
     } catch (e) {
       setAddErr(e.message);
     }
+    addInFlight.current = false;
     setAddBusy(false);
   }
 
