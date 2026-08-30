@@ -30,6 +30,12 @@ const DAY_MS = 86400000;
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const addDays = (d, n) => new Date(d.getTime() + n * DAY_MS);
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+// review_snapshots.captured_on is a plain "YYYY-MM-DD" date string, no
+// time/zone — `new Date(dateStr)` parses that as UTC midnight, which can
+// print as the previous day once toLocaleDateString applies the viewer's
+// local zone. Parse it as a local calendar date instead, same as every
+// other date in this file.
+const parseLocalDate = (dateStr) => { const [y, m, d] = dateStr.split("-").map(Number); return new Date(y, m - 1, d); };
 
 // Most recent snapshot with captured_on <= dateStr (snapshots must be sorted ascending).
 function snapshotAsOf(snapshots, dateStr) {
@@ -80,7 +86,7 @@ function Tip({ active, payload, label }) {
 
 /* --------------------------- calendar picker --------------------------- */
 
-function RangePicker({ today, onApply, onClose }) {
+function RangePicker({ today, minDate, onApply, onClose }) {
   const [month, setMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [start, setStart] = useState(null);
   const [end, setEnd] = useState(null);
@@ -120,8 +126,12 @@ function RangePicker({ today, onApply, onClose }) {
           const sel = (start && d.getTime() === start.getTime()) || (end && d.getTime() === end.getTime());
           const mid = inRange(d);
           const future = d > today;
+          // Nothing was tracked before the first review snapshot — a date
+          // earlier than that can only ever render as a flat, misleading
+          // line, so it isn't a real choice here.
+          const tooEarly = minDate && d < minDate;
           return (
-            <button key={i} disabled={future} onClick={() => pick(d)}
+            <button key={i} disabled={future || tooEarly} onClick={() => pick(d)}
               className="h-8 text-[12px] rounded-md transition disabled:opacity-25"
               style={{
                 background: sel ? ACCENT : mid ? "#eef2ff" : "transparent",
@@ -251,8 +261,23 @@ export default function Dashboard() {
   const { businessId, resolving } = useBusinessId();
   const { loading: bizLoading, business, cards, snapshots } = useBusinessData(businessId);
 
-  const rangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
+  // The earliest date we actually have review-count data for — snapshots
+  // are ordered ascending, so [0] is it. Drives both "Live since" (below)
+  // and the range cap: neither should imply visibility into a stretch of
+  // time before this business was actually being tracked.
+  const earliestTrackedDate = useMemo(
+    () => (snapshots.length ? parseLocalDate(snapshots[0].captured_on) : null),
+    [snapshots],
+  );
+
+  const rawRangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
   const rangeEnd = custom ? startOfDay(custom[1]) : today;
+  // Clamp, don't just cap the picker — a 60d/custom selection that reaches
+  // further back than tracking began should quietly shrink to what's
+  // actually available rather than pad the chart with a flat "0 gained"
+  // stretch that looks like real, known data.
+  const rangeStart = earliestTrackedDate && rawRangeStart < earliestTrackedDate ? earliestTrackedDate : rawRangeStart;
+  const wasClamped = rangeStart.getTime() !== rawRangeStart.getTime();
   const spanDays = Math.max(1, Math.round((rangeEnd - rangeStart) / DAY_MS) + 1);
   const priorStart = addDays(rangeStart, -spanDays);
   const priorEnd = addDays(rangeStart, -1);
@@ -413,7 +438,7 @@ export default function Dashboard() {
             <div className="text-[11px] uppercase tracking-[0.14em] mb-2" style={{ color: MUTED }}>Review activity</div>
             <h1 className="text-[34px] font-bold tracking-tight" style={{ color: INK }}>{business.name}</h1>
             <div className="text-[13px] mt-1" style={{ color: MUTED }}>
-              Live since {new Date(business.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              Live since {(earliestTrackedDate ?? new Date(business.created_at)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </div>
           </div>
 
@@ -438,8 +463,13 @@ export default function Dashboard() {
                 {custom && <X size={12} onClick={(e) => { e.stopPropagation(); setCustom(null); }} />}
               </button>
             </div>
-            {showCal && <RangePicker today={today} onClose={() => setShowCal(false)}
+            {showCal && <RangePicker today={today} minDate={earliestTrackedDate} onClose={() => setShowCal(false)}
               onApply={(s, e) => { setCustom([s, e]); setShowCal(false); }} />}
+            {wasClamped && !showCal && (
+              <div className="text-[11px] text-right mt-1.5 whitespace-nowrap" style={{ color: MUTED }}>
+                Showing from {rangeStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — earliest tracked data
+              </div>
+            )}
           </div>
         </div>
 

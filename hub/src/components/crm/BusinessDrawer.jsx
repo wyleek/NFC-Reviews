@@ -5,6 +5,7 @@ import { ACTIVITY_TYPE_LABELS, STAGE_LABELS } from "../../lib/stages";
 import { OutcomeButtons } from "./OutcomeButtons";
 import { VoiceNote } from "./VoiceNote";
 import { FollowUpPicker } from "./FollowUpPicker";
+import { ContactsEditor } from "../shared/ContactsEditor";
 
 const CARD_TYPES = ["stand", "placard", "badge", "card"];
 const DEAL_STATUSES = ["open", "won", "lost"];
@@ -55,45 +56,6 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
   function refresh() {
     load();
     onChanged();
-  }
-
-  // ---------------------------------------------------------------- contacts
-  function editContact(id, patch) {
-    setContacts(contacts.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }
-
-  async function saveContact(contact) {
-    try {
-      await adminApi.updateContact({
-        id: contact.id,
-        name: contact.name,
-        title: contact.title,
-        email: contact.email,
-        phone: contact.phone,
-      });
-      onChanged();
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function addContactRow() {
-    try {
-      await adminApi.addContact({ business_id: business.id, name: "", title: "", email: "", phone: "" });
-      refresh();
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function removeContact(id) {
-    if (!window.confirm("Delete this contact?")) return;
-    try {
-      await adminApi.deleteContact(id);
-      refresh();
-    } catch (e) {
-      setError(e.message);
-    }
   }
 
   // ------------------------------------------------------------------ deals
@@ -228,58 +190,14 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
 
             <section>
               <h3>Contacts</h3>
-              {contacts.length === 0 ? (
-                <p className="empty">No contacts yet.</p>
-              ) : (
-                <ul className="contact-list">
-                  {contacts.map((c) => (
-                    <li key={c.id} className="editable-row">
-                      <button
-                        type="button"
-                        className="row-delete"
-                        onClick={() => removeContact(c.id)}
-                        aria-label="Delete contact"
-                      >
-                        ×
-                      </button>
-                      {c.is_primary ? <span className="pill">primary</span> : null}
-                      <div className="row-fields">
-                        <input
-                          value={c.name || ""}
-                          placeholder="Name"
-                          onChange={(e) => editContact(c.id, { name: e.target.value })}
-                          onBlur={() => saveContact(c)}
-                        />
-                        <input
-                          value={c.title || ""}
-                          placeholder="Title"
-                          onChange={(e) => editContact(c.id, { title: e.target.value })}
-                          onBlur={() => saveContact(c)}
-                        />
-                      </div>
-                      <div className="row-fields">
-                        <input
-                          type="email"
-                          value={c.email || ""}
-                          placeholder="Email"
-                          onChange={(e) => editContact(c.id, { email: e.target.value })}
-                          onBlur={() => saveContact(c)}
-                        />
-                        <input
-                          type="tel"
-                          value={c.phone || ""}
-                          placeholder="Phone"
-                          onChange={(e) => editContact(c.id, { phone: e.target.value })}
-                          onBlur={() => saveContact(c)}
-                        />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <button type="button" className="btn ghost sm" style={{ marginTop: 8 }} onClick={addContactRow}>
-                + Add contact
-              </button>
+              <ContactsEditor
+                businessId={business.id}
+                contacts={contacts}
+                setContacts={setContacts}
+                onSaved={onChanged}
+                onListChanged={refresh}
+                onError={setError}
+              />
             </section>
 
             <section>

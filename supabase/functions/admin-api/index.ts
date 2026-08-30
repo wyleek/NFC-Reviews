@@ -281,18 +281,24 @@ Deno.serve(async (req) => {
           .eq("id", p.business_id).maybeSingle()
       : await admin.from("businesses").select("id, name, stage, google_place_id")
           .eq("google_place_id", p.place_id).maybeSingle();
-    if (!biz) return json({ business: null, cards: [], contact: null });
+    if (!biz) return json({ business: null, cards: [], contact: null, contacts: [] });
 
     const { data: cards } = await admin
       .from("cards").select("id, label, card_type, slug")
       .eq("business_id", biz.id).order("created_at");
-    const { data: contact } = await admin
-      .from("contacts").select("id, name, title, email, phone")
-      .eq("business_id", biz.id).eq("is_primary", true).maybeSingle();
+    // `contacts` (plural, all of them) is what the hub's shared contact
+    // editor (ContactsEditor — same one BusinessDrawer's CRM drawer uses)
+    // needs; `contact` (singular, primary-only) stays for backward
+    // compatibility with callers that only ever handled one.
+    const { data: contacts } = await admin
+      .from("contacts").select("id, name, title, email, phone, is_primary")
+      .eq("business_id", biz.id).order("is_primary", { ascending: false });
+    const contact = (contacts ?? []).find((c: any) => c.is_primary) ?? contacts?.[0] ?? null;
     return json({
       business: biz,
       cards: (cards ?? []).map((c: any) => ({ ...c, url: tapUrl(c.slug) })),
-      contact: contact ?? null,
+      contact,
+      contacts: contacts ?? [],
     });
   }
 
