@@ -68,6 +68,17 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
     }
   }
 
+  async function saveBusinessAddress() {
+    try {
+      await adminApi.setBusinessAddress(business.id, {
+        address: business.address, city: business.city, zip: business.zip,
+      });
+      onChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function toggleDoNotContact() {
     const next = !business.do_not_contact;
     try {
@@ -174,8 +185,21 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
           <div className="board-status">Loading…</div>
         ) : (
           <>
-            <h2>{business.name}</h2>
+            <h2>
+              {business.name}
+              {/* City/zip disambiguates same-named locations of a chain —
+                  without it, two "Ledo Pizza" rows look identical here. */}
+              {business.city ? ` — ${business.city}${business.zip ? ` ${business.zip}` : ""}` : ""}
+            </h2>
             <div className="drawer-stage-pill">{STAGE_LABELS[business.stage]}</div>
+            <div className="stats" style={{ marginTop: 8 }}>
+              <span>
+                <b>{business.current_rating ?? "—"}</b> ★
+              </span>
+              <span>
+                <b>{business.current_review_count ?? "—"}</b> reviews
+              </span>
+            </div>
 
             {onManageInAdmin ? (
               // Deep link into Admin's full onboarding wizard for this same
@@ -195,18 +219,40 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
             ) : null}
 
             <section>
-              <h3>Business number</h3>
+              <h3>Business info</h3>
               <p className="sub" style={{ marginTop: 0 }}>
-                Auto-collected from Google Places when this business was found — the general/front-line
-                line, separate from a specific owner or manager's number (set that under Contacts below).
+                Phone/address auto-collect from Google Places when this business is found in Admin —
+                editable here for when Google has it wrong. Phone here is the general/front-line line,
+                separate from a specific owner or manager's number (set that under Contacts below).
               </p>
               <input
                 type="tel"
                 value={business.phone || ""}
-                placeholder="(202) 555-0134"
+                placeholder="Business phone"
                 onChange={(e) => setBusiness({ ...business, phone: e.target.value })}
                 onBlur={saveBusinessPhone}
               />
+              <input
+                style={{ marginTop: 8 }}
+                value={business.address || ""}
+                placeholder="Street address"
+                onChange={(e) => setBusiness({ ...business, address: e.target.value })}
+                onBlur={saveBusinessAddress}
+              />
+              <div className="row-fields" style={{ marginTop: 8 }}>
+                <input
+                  value={business.city || ""}
+                  placeholder="City"
+                  onChange={(e) => setBusiness({ ...business, city: e.target.value })}
+                  onBlur={saveBusinessAddress}
+                />
+                <input
+                  value={business.zip || ""}
+                  placeholder="ZIP"
+                  onChange={(e) => setBusiness({ ...business, zip: e.target.value })}
+                  onBlur={saveBusinessAddress}
+                />
+              </div>
             </section>
 
             <section>

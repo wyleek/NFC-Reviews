@@ -7,7 +7,7 @@ import { StageColumn } from "./StageColumn";
 import { EditViewMenu } from "./EditViewMenu";
 
 const BUSINESS_FIELDS =
-  "id, name, stage, stage_updated_at, current_review_count, current_rating, " +
+  "id, name, stage, stage_updated_at, current_review_count, current_rating, city, zip, " +
   "rank_score, traffic_score, category_group, tier, corridor, best_callback_window, " +
   "sms_consent, do_not_contact";
 

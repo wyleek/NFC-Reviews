@@ -63,6 +63,8 @@
 //     the field rep never finishes the full onboarding wizard.
 //   set_business_phone { business_id, phone } — manual correction for the
 //     same businesses.phone field, for when Google has it wrong or missing.
+//   set_business_address { business_id, address, city, zip } — manual
+//     correction for the same address/city/zip fields add_lead auto-fills.
 //   set_do_not_contact { business_id, value } — reversible in both
 //     directions (unlike log_pre_call's disqualifier, which only ever sets
 //     it): the Call List's "Remove" button and the drawer's own toggle.
@@ -290,10 +292,15 @@ Deno.serve(async (req) => {
   // contact info instead of offering a blank form that risks re-entering
   // (and, pre-fix, duplicating) data that's already on file.
   if (action === "lookup_business") {
+    // A plain (not concatenated) string literal — supabase-js infers the
+    // returned row's shape from this string's literal type, which breaks
+    // (falls back to a generic error type) once it's built via `+`.
+    const lookupFields =
+      "id, name, stage, google_place_id, phone, do_not_contact, current_review_count, current_rating, reviews_synced_at, address, city, zip" as const;
     const { data: biz } = p.business_id
-      ? await admin.from("businesses").select("id, name, stage, google_place_id, phone, do_not_contact")
+      ? await admin.from("businesses").select(lookupFields)
           .eq("id", p.business_id).maybeSingle()
-      : await admin.from("businesses").select("id, name, stage, google_place_id, phone, do_not_contact")
+      : await admin.from("businesses").select(lookupFields)
           .eq("google_place_id", p.place_id).maybeSingle();
     if (!biz) return json({ business: null, cards: [], contact: null, contacts: [] });
 
@@ -677,15 +684,25 @@ Deno.serve(async (req) => {
 
     // Dedicated Place Details request — search_place's field mask (above)
     // doesn't request a phone number and that action belongs to a parallel
-    // workstream, so ask for phone here instead. Places API (New) requires
-    // every field, phone included, to be listed explicitly in the
-    // X-Goog-FieldMask header or it's simply omitted from the response.
+    // workstream, so ask for phone (plus rating/review count and address)
+    // here instead. Places API (New) requires every field to be listed
+    // explicitly in the X-Goog-FieldMask header or it's simply omitted
+    // from the response. Pulling rating/userRatingCount/addressComponents
+    // in this same request (rather than a second billed call) means every
+    // Admin pick or Call List add captures live review stats and a real
+    // address immediately — previously add_lead created the business row
+    // with no review data at all, so a business showed reviews in the
+    // search-hit list (live from search_place) and then showed nothing
+    // once picked, not refreshing until the next daily sync-reviews cron
+    // run (up to 24h later).
     const detailsRes = await fetch(
       `https://places.googleapis.com/v1/places/${encodeURIComponent(p.place_id)}`,
       {
         headers: {
           "X-Goog-Api-Key": PLACES_KEY,
-          "X-Goog-FieldMask": "id,displayName,formattedAddress,nationalPhoneNumber,internationalPhoneNumber",
+          "X-Goog-FieldMask":
+            "id,displayName,formattedAddress,nationalPhoneNumber,internationalPhoneNumber," +
+            "rating,userRatingCount,addressComponents",
         },
       },
     );
@@ -693,13 +710,28 @@ Deno.serve(async (req) => {
     const d = await detailsRes.json();
     const phone: string | null = d.nationalPhoneNumber ?? d.internationalPhoneNumber ?? null;
     const name: string = p.name || d.displayName?.text || "Unknown business";
+    const address: string | null = d.formattedAddress ?? null;
+    // addressComponents entries look like { longText, shortText, types[] } —
+    // pull the two components that actually disambiguate same-named
+    // locations of a chain (crm-spec.md gap: nothing persisted an address
+    // at all before this, so two saved "Ledo Pizza" rows looked identical
+    // everywhere but Admin's live search-hit list).
+    let city: string | null = null;
+    let zip: string | null = null;
+    for (const c of d.addressComponents ?? []) {
+      if (c.types?.includes("locality")) city = c.longText ?? null;
+      else if (!city && c.types?.includes("postal_town")) city = c.longText ?? null;
+      if (c.types?.includes("postal_code")) zip = c.longText ?? null;
+    }
+    const rating: number | null = d.rating ?? null;
+    const reviewCount: number | null = d.userRatingCount ?? null;
 
     // Find-or-create by google_place_id — same dedup this file already
     // relies on in create_business/quick_link. Unlike create_business
     // (which is closing a sale, so it's fine to force stage='customer'),
     // a quick-add must never regress a business that's already further
-    // along (e.g. already a customer) — so the existing row is left
-    // completely untouched, stage included.
+    // along (e.g. already a customer) — so the existing row's stage is
+    // left completely untouched.
     const { data: existing } = await admin
       .from("businesses").select()
       .eq("google_place_id", p.place_id).maybeSingle();
@@ -710,6 +742,10 @@ Deno.serve(async (req) => {
         name,
         google_place_id: p.place_id,
         stage: "qualified",
+        phone, address, city, zip,
+        current_review_count: reviewCount,
+        current_rating: rating,
+        reviews_synced_at: reviewCount != null ? new Date().toISOString() : null,
       }).select().single();
       if (error) {
         // 23505 = unique_violation. Someone else (a double-click before the
@@ -728,19 +764,32 @@ Deno.serve(async (req) => {
       }
     }
 
-    // The auto-collected number goes on businesses.phone — the business's
-    // own general/front-line line — NOT on the primary contact. Contacts
-    // are for a specific person (owner/manager), entered manually; this
-    // used to write straight onto contacts.phone and would silently
-    // clobber a phone number a field rep had corrected there by hand every
-    // time add_lead ran again for the same business. Never overwrite a
-    // phone already on file (Google can go stale; a manual correction here
-    // should stick), only fill it in once.
-    if (phone && !biz.phone) {
-      const { data: updated, error: pErr } = await admin
-        .from("businesses").update({ phone }).eq("id", biz.id).select().single();
-      if (pErr) return json({ error: pErr.message }, 400);
-      biz = updated;
+    // A brand-new row (the `!existing` branch above) already got all of
+    // this on insert — only an already-existing business needs it applied
+    // now. Review stats are always trustworthy straight from Google —
+    // nobody hand-corrects a review count — so refresh them
+    // unconditionally on every add_lead call, same as the daily
+    // sync-reviews cron does, just immediately instead of up to 24h later.
+    // Phone/address/city/zip are different: a field rep can and does
+    // correct these by hand (see set_business_phone/set_business_address),
+    // so only fill them in when still empty — never clobber a manual
+    // correction with a stale or wrong Google value.
+    if (existing) {
+      const fillIfMissing: Record<string, unknown> = {};
+      if (phone && !biz.phone) fillIfMissing.phone = phone;
+      if (address && !biz.address) fillIfMissing.address = address;
+      if (city && !biz.city) fillIfMissing.city = city;
+      if (zip && !biz.zip) fillIfMissing.zip = zip;
+      const refresh: Record<string, unknown> =
+        reviewCount != null
+          ? { current_review_count: reviewCount, current_rating: rating, reviews_synced_at: new Date().toISOString() }
+          : {};
+      if (Object.keys(fillIfMissing).length || Object.keys(refresh).length) {
+        const { data: updated, error: uErr } = await admin
+          .from("businesses").update({ ...fillIfMissing, ...refresh }).eq("id", biz.id).select().single();
+        if (uErr) return json({ error: uErr.message }, 400);
+        biz = updated;
+      }
     }
 
     // Still worth a placeholder primary-contact row so the pre-call form
@@ -770,6 +819,21 @@ Deno.serve(async (req) => {
     const { data, error } = await admin
       .from("businesses").update({ phone: p.phone || null }).eq("id", p.business_id)
       .select("id, phone").single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
+  // ----------------------------------------------------- set_business_address
+  // Manual correction/entry for address/city/zip — same fields add_lead
+  // auto-fills from Google Places, for when Google has it wrong, or a
+  // business has no Google listing at all. city/zip are what actually
+  // tell apart same-named locations of a chain elsewhere in the hub.
+  if (action === "set_business_address") {
+    const { data, error } = await admin
+      .from("businesses")
+      .update({ address: p.address || null, city: p.city || null, zip: p.zip || null })
+      .eq("id", p.business_id)
+      .select("id, address, city, zip").single();
     if (error) return json({ error: error.message }, 400);
     return json({ business: data });
   }
