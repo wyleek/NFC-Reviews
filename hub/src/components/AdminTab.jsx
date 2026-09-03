@@ -124,7 +124,7 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
       if (supabaseConfigured) {
         const { data, error } = await supabase
           .from("businesses")
-          .select("id, name, stage, google_place_id, current_review_count, current_rating")
+          .select("id, name, stage, google_place_id, current_review_count, current_rating, phone, city, zip")
           .order("name")
           .limit(500);
         const matches = !error ? (data ?? []).filter((b) => namesLikelyMatch(query, b.name)) : [];
@@ -199,9 +199,14 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     }
   }
 
-  // Picking a local match ("Already on file") — no Google call at all.
-  // Reuses lookup_business exactly like pickResult, keyed by business_id
-  // when there's no place_id handy (or the row predates one).
+  // Picking a local match ("Already on file") — same find-or-refresh via
+  // add_lead as pickResult, keyed off the business's own google_place_id
+  // (never a fresh Google search — this business is already in hand).
+  // Without this, an already-saved business with stale/missing review
+  // stats (e.g. one added before this field existed, or whose row got
+  // created without them) stayed stale forever short of the next daily
+  // sync-reviews cron run — this is the path that actually fixes that for
+  // a business you're revisiting, not just a freshly-found one.
   async function pickLocalResult(biz) {
     setLocalHits([]);
     setHits([]);
@@ -219,6 +224,13 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setCards(DEFAULT_CARDS());
     setContact(EMPTY_CONTACT);
     setContacts([]);
+    if (biz.google_place_id) {
+      try {
+        await adminApi.addLead(biz.google_place_id, biz.name);
+      } catch {
+        // best-effort — see pickResult's comment
+      }
+    }
     try {
       const d = await adminApi.lookupBusiness(
         biz.google_place_id ? { place_id: biz.google_place_id } : { business_id: biz.id },
@@ -230,7 +242,10 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
   }
 
   // CRM "Manage in Admin" deep link — same edit flow as a local search pick,
-  // just entered from the other tab with only a business_id in hand.
+  // just entered from the other tab with only a business_id in hand. Looks
+  // up the business first to learn its place_id, then (like pickLocalResult)
+  // refreshes via add_lead and looks up again — same "revisiting shouldn't
+  // leave stale reviews stale" fix.
   useEffect(() => {
     if (!deepLinkBusinessId) return;
     let cancelled = false;
@@ -238,7 +253,15 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
       resetAll();
       setBusy(true);
       try {
-        const d = await adminApi.lookupBusiness({ business_id: deepLinkBusinessId });
+        let d = await adminApi.lookupBusiness({ business_id: deepLinkBusinessId });
+        if (!cancelled && d.business?.google_place_id) {
+          try {
+            await adminApi.addLead(d.business.google_place_id, d.business.name);
+            d = await adminApi.lookupBusiness({ business_id: deepLinkBusinessId });
+          } catch {
+            // best-effort — fall back to the first lookup's data
+          }
+        }
         if (!cancelled && d.business) {
           setQuery(d.business.name);
           setPicked({
@@ -338,6 +361,30 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
       />
       {picked && (
         <>
+          {existing && (
+            // Stays visible for the rest of the flow (Step 2/3, not just
+            // the search-hit list above) — reviews/rating used to only
+            // show here for the few seconds before you picked a result,
+            // then vanish: add_lead was creating the row with no review
+            // data at all, only backfilled by the next daily sync. It now
+            // captures reviews/rating/address in the same lookup that
+            // finds this business, so this stays accurate immediately.
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div className="n" style={{ fontWeight: 600 }}>
+                {existing.name}
+                {existing.city ? ` — ${existing.city}${existing.zip ? ` ${existing.zip}` : ""}` : ""}
+              </div>
+              <div className="stats" style={{ flexWrap: "wrap", marginTop: 6 }}>
+                <span>
+                  <b>{existing.current_rating ?? "—"}</b> ★
+                </span>
+                <span>
+                  <b>{existing.current_review_count ?? "—"}</b> reviews
+                </span>
+                <span>{existing.phone ? `Business: ${existing.phone}` : "No business number on file"}</span>
+              </div>
+            </div>
+          )}
           {existing && existing.stage !== "customer" && (
             <p className="note" style={{ margin: "-4px 0 12px" }}>
               Already in the system as a lead (stage: {existing.stage}) — creating cards below moves it

@@ -109,6 +109,13 @@ export const adminApi = {
   // Places; this is the manual correction/entry path.
   setBusinessPhone: (business_id, phone) => call("set_business_phone", { business_id, phone }),
 
+  // city/zip disambiguate same-named locations of a chain everywhere else
+  // in the hub (Call List, Kanban, Clients) — address/city/zip are the same
+  // fields add_lead auto-fills from Google Places, editable here for when
+  // Google has it wrong or a business has no Google listing at all.
+  setBusinessAddress: (business_id, { address, city, zip }) =>
+    call("set_business_address", { business_id, address, city, zip }),
+
   // Reversible Call List removal (CallList's "Remove" button, the drawer's
   // own toggle) — unlike log_pre_call's disqualifier, which only ever sets
   // do_not_contact, never clears it.
