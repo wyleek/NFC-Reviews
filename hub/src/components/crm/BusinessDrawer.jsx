@@ -58,6 +58,27 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
     onChanged();
   }
 
+  // ---------------------------------------------------------------- business
+  async function saveBusinessPhone() {
+    try {
+      await adminApi.setBusinessPhone(business.id, business.phone);
+      onChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function toggleDoNotContact() {
+    const next = !business.do_not_contact;
+    try {
+      await adminApi.setDoNotContact(business.id, next);
+      setBusiness((b) => ({ ...b, do_not_contact: next }));
+      onChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   // ------------------------------------------------------------------ deals
   function editDeal(id, patch) {
     setDeals(deals.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -172,6 +193,29 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
                 Manage in Admin ↗
               </button>
             ) : null}
+
+            <section>
+              <h3>Business number</h3>
+              <p className="sub" style={{ marginTop: 0 }}>
+                Auto-collected from Google Places when this business was found — the general/front-line
+                line, separate from a specific owner or manager's number (set that under Contacts below).
+              </p>
+              <input
+                type="tel"
+                value={business.phone || ""}
+                placeholder="(202) 555-0134"
+                onChange={(e) => setBusiness({ ...business, phone: e.target.value })}
+                onBlur={saveBusinessPhone}
+              />
+            </section>
+
+            <section>
+              <h3>Call list</h3>
+              <label className="inline-check">
+                <input type="checkbox" checked={Boolean(business.do_not_contact)} onChange={toggleDoNotContact} />
+                Do not contact — removed from the Call List
+              </label>
+            </section>
 
             <section>
               <h3>Follow-up</h3>

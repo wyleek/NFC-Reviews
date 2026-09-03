@@ -6,7 +6,7 @@ import { namesLikelyMatch, namesCollapseEqual } from "../../lib/nameMatch";
 import { PreCallLogForm } from "./PreCallLogForm";
 
 const BUSINESS_FIELDS =
-  "id, name, stage, google_place_id, tier, rank_score, category_group, corridor, " +
+  "id, name, stage, google_place_id, phone, tier, rank_score, category_group, corridor, " +
   "best_callback_window, do_not_contact, follow_up_at, created_at";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -72,6 +72,10 @@ export function CallList({ search = "" }) {
   const [error, setError] = useState(null);
   const [loggingFor, setLoggingFor] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  // Feedback for the per-row Remove/Reset actions below — separate from
+  // `error` (load()'s whole-page failure state) so one failed row action
+  // doesn't blank the entire list.
+  const [rowErr, setRowErr] = useState("");
 
   // Quick-add: type a business name, press Enter, pick the Google Places
   // result — it's added straight to the list. Deliberately not the full
@@ -267,6 +271,36 @@ export function CallList({ search = "" }) {
       }
       return next;
     });
+  }
+
+  // "Remove" — soft (do_not_contact=true), not a delete: the business and
+  // its history stay put, it just drops out of load()'s
+  // .eq("do_not_contact", false) filter. Reversible from the business
+  // drawer's own toggle, so this isn't a one-way trip like disqualifying
+  // on a pre-call log is.
+  async function removeFromCallList(business) {
+    if (!window.confirm(`Remove ${business.name} from the Call List? You can bring it back from its drawer.`)) return;
+    try {
+      await adminApi.setDoNotContact(business.id, true);
+      setRowErr("");
+      setRefreshToken((t) => t + 1);
+    } catch (e) {
+      setRowErr(e.message);
+    }
+  }
+
+  // "Reset" — clears a logged day/time-window without going through
+  // PreCallLogForm's required-start-time validation or logging a fresh
+  // pre_call activity. For a mislogged or stale schedule, not a real call.
+  async function resetSchedule(business) {
+    if (!window.confirm(`Clear the logged day/time for ${business.name}? It moves back to Unscheduled.`)) return;
+    try {
+      await adminApi.resetCallSchedule(business.id);
+      setRowErr("");
+      setRefreshToken((t) => t + 1);
+    } catch (e) {
+      setRowErr(e.message);
+    }
   }
 
   if (loading) return <div className="board-status">Loading call list…</div>;
@@ -512,6 +546,8 @@ export function CallList({ search = "" }) {
         ) : null}
       </div>
 
+      {rowErr ? <p className="board-status error">{rowErr}</p> : null}
+
       {groups.length === 0 ? (
         <p className="empty">
           {q
@@ -527,8 +563,15 @@ export function CallList({ search = "" }) {
           <div className="call-list-group-header">{group.label}</div>
           <ul className="call-list-rows">
             {group.rows.map(({ business, isVisited, contact, followUpAt, followUpDue }) => {
+              // Contact phone is a specific owner/manager's direct line
+              // (manually entered — pre-call log or the contact editor);
+              // business.phone is the general/front-line number add_lead
+              // auto-collects from Google Places. Show both when known —
+              // whoever's calling may want either one.
               const tel = contact?.phone ? telHref(contact.phone) : null;
+              const bizTel = business.phone ? telHref(business.phone) : null;
               const window = contact ? formatWindow(contact) : null;
+              const hasSchedule = Boolean(contact?.dm_window_start || contact?.dm_days?.length);
               return (
                 <li key={business.id} className={isVisited ? "visited" : ""}>
                   <div className="call-row-main">
@@ -538,6 +581,11 @@ export function CallList({ search = "" }) {
                         {tel ? (
                           <a className="call-row-phone" href={tel} onClick={(e) => e.stopPropagation()}>
                             Call {contact.phone}
+                          </a>
+                        ) : null}
+                        {bizTel ? (
+                          <a className="call-row-phone" href={bizTel} onClick={(e) => e.stopPropagation()}>
+                            Business: {business.phone}
                           </a>
                         ) : null}
                       </div>
@@ -564,9 +612,19 @@ export function CallList({ search = "" }) {
                         <div className="call-row-contact empty">No pre-call logged yet.</div>
                       )}
                     </div>
-                    <button type="button" className="btn ghost sm" onClick={() => setLoggingFor(business.id)}>
-                      Log call
-                    </button>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                      <button type="button" className="btn ghost sm" onClick={() => setLoggingFor(business.id)}>
+                        Log call
+                      </button>
+                      {hasSchedule ? (
+                        <button type="button" className="btn ghost sm" onClick={() => resetSchedule(business)}>
+                          Reset
+                        </button>
+                      ) : null}
+                      <button type="button" className="btn ghost sm" onClick={() => removeFromCallList(business)}>
+                        Remove
+                      </button>
+                    </div>
                   </div>
                   {loggingFor === business.id ? (
                     <PreCallLogForm business={business} contact={contact} onLogged={refresh} onCancel={() => setLoggingFor(null)} />

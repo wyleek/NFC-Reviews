@@ -157,10 +157,26 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setBusy(false);
   }
 
-  // Picking a Google result checks whether this business already has a real
-  // row — e.g. a quick demo card already written via linkmaker.html, or
-  // a scraped lead — so Step 2/3 can pre-fill with what actually exists
-  // instead of offering blanks that would duplicate already-written data.
+  // Picking a Google result puts it straight on the Call List via add_lead
+  // (find-or-create, stage='qualified' on first creation, pulls the
+  // business's phone number into businesses.phone) — same landing spot as
+  // CallList's own quick-add, so a business found here but not fully
+  // onboarded on the spot isn't lost, it's queued to call. Best-effort:
+  // the lookup below still runs even if this fails, and "Create" at the
+  // end of the wizard can make the row from scratch either way.
+  //
+  // A side effect worth knowing: because add_lead runs first, the
+  // lookup_business call right after it will now always find a row — so
+  // `existing` (below) is set for basically every Google-search pick, not
+  // just genuinely pre-existing businesses, and Step 2 always renders the
+  // live ContactsEditor rather than the once-off ContactStep form. That's
+  // correct (the business now does exist, immediately), just a change
+  // from the old "brand new vs. already on file" split.
+  //
+  // Also billed: every result clicked here (including ones only clicked to
+  // compare before picking a different one) now makes a Places Details
+  // call and creates a row — use the Call List's "Remove" button to clean
+  // up any stray adds from browsing multiple candidates.
   async function pickResult(i) {
     const hit = hits[i];
     setLocalHits([]);
@@ -170,6 +186,11 @@ export function AdminTab({ deepLinkBusinessId, onDeepLinkHandled }) {
     setCards(DEFAULT_CARDS());
     setContact(EMPTY_CONTACT);
     setContacts([]);
+    try {
+      await adminApi.addLead(hit.place_id, hit.name);
+    } catch {
+      // best-effort — see comment above
+    }
     try {
       const d = await adminApi.lookupBusiness({ place_id: hit.place_id });
       applyLookupResult(d);
