@@ -99,5 +99,22 @@ export const adminApi = {
   deleteCard: (id) => call("delete_card", { id }),
 
   // Call List quick-add — search_place + this is the whole flow (no wizard).
+  // Also used by AdminTab.jsx's pickResult, so finding a business through
+  // Admin lands it on the Call List too.
   addLead: (place_id, name) => call("add_lead", { place_id, name }),
+
+  // The business's own general/front-line number — separate from a
+  // contact's phone (add_contact/update_contact), which is a specific
+  // owner/manager's direct line. add_lead auto-fills this from Google
+  // Places; this is the manual correction/entry path.
+  setBusinessPhone: (business_id, phone) => call("set_business_phone", { business_id, phone }),
+
+  // Reversible Call List removal (CallList's "Remove" button, the drawer's
+  // own toggle) — unlike log_pre_call's disqualifier, which only ever sets
+  // do_not_contact, never clears it.
+  setDoNotContact: (business_id, value) => call("set_do_not_contact", { business_id, value }),
+
+  // Clears a business's logged call-schedule (days/time window) without
+  // logging a new pre-call activity — CallList's "Reset" button.
+  resetCallSchedule: (business_id) => call("reset_call_schedule", { business_id }),
 };

@@ -54,8 +54,22 @@
 //   add_lead { place_id, name? }
 //     — find-or-create the business by google_place_id (never downgrades
 //     a stage past wherever it already is), pulls the phone number from a
-//     dedicated Places Details call, and inserts/updates its primary
-//     contact. Stage is only set to 'qualified' on first creation.
+//     dedicated Places Details call into businesses.phone (the general
+//     business line — see set_business_phone below, NOT contacts.phone),
+//     and ensures a placeholder primary contact exists. Stage is only set
+//     to 'qualified' on first creation. hub's Admin tab (AdminTab.jsx)
+//     also calls this the moment a Google search result is picked, so
+//     simply finding a business there lands it on the Call List even if
+//     the field rep never finishes the full onboarding wizard.
+//   set_business_phone { business_id, phone } — manual correction for the
+//     same businesses.phone field, for when Google has it wrong or missing.
+//   set_do_not_contact { business_id, value } — reversible in both
+//     directions (unlike log_pre_call's disqualifier, which only ever sets
+//     it): the Call List's "Remove" button and the drawer's own toggle.
+//   reset_call_schedule { business_id } — clears the primary contact's
+//     logged dm_days/dm_window(_start/_end)/verified_at, dropping the row
+//     back into the Call List's Unscheduled bucket. No activity is logged;
+//     this undoes a stale/mislogged pre-call, it isn't one itself.
 //
 // Deploy: supabase functions deploy admin-api --no-verify-jwt
 // Guarded by ADMIN_TOKEN, checked below.
@@ -277,9 +291,9 @@ Deno.serve(async (req) => {
   // (and, pre-fix, duplicating) data that's already on file.
   if (action === "lookup_business") {
     const { data: biz } = p.business_id
-      ? await admin.from("businesses").select("id, name, stage, google_place_id")
+      ? await admin.from("businesses").select("id, name, stage, google_place_id, phone, do_not_contact")
           .eq("id", p.business_id).maybeSingle()
-      : await admin.from("businesses").select("id, name, stage, google_place_id")
+      : await admin.from("businesses").select("id, name, stage, google_place_id, phone, do_not_contact")
           .eq("google_place_id", p.place_id).maybeSingle();
     if (!biz) return json({ business: null, cards: [], contact: null, contacts: [] });
 
@@ -714,22 +728,28 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Insert-or-update the primary contact, same pattern as log_pre_call.
+    // The auto-collected number goes on businesses.phone — the business's
+    // own general/front-line line — NOT on the primary contact. Contacts
+    // are for a specific person (owner/manager), entered manually; this
+    // used to write straight onto contacts.phone and would silently
+    // clobber a phone number a field rep had corrected there by hand every
+    // time add_lead ran again for the same business. Never overwrite a
+    // phone already on file (Google can go stale; a manual correction here
+    // should stick), only fill it in once.
+    if (phone && !biz.phone) {
+      const { data: updated, error: pErr } = await admin
+        .from("businesses").update({ phone }).eq("id", biz.id).select().single();
+      if (pErr) return json({ error: pErr.message }, 400);
+      biz = updated;
+    }
+
+    // Still worth a placeholder primary-contact row so the pre-call form
+    // has somewhere to attach an owner/manager's name and direct number —
+    // no phone written here anymore, see above.
     const { data: existingContact } = await admin
       .from("contacts").select("id")
       .eq("business_id", biz.id).eq("is_primary", true).maybeSingle();
-
-    if (phone) {
-      const { error: cErr } = existingContact
-        ? await admin.from("contacts").update({ phone }).eq("id", existingContact.id)
-        : await admin.from("contacts").insert({
-            business_id: biz.id, role: "owner", is_primary: true,
-            source: "google_places", phone,
-          });
-      if (cErr) return json({ error: cErr.message }, 400);
-    } else if (!existingContact) {
-      // Still worth a placeholder primary-contact row even with no phone —
-      // the pre-call form updates this same row in place.
+    if (!existingContact) {
       const { error: cErr } = await admin.from("contacts").insert({
         business_id: biz.id, role: "owner", is_primary: true, source: "google_places",
       });
@@ -737,6 +757,53 @@ Deno.serve(async (req) => {
     }
 
     return json({ business: biz, phone });
+  }
+
+  // ------------------------------------------------------- set_business_phone
+  // Manual correction/entry for businesses.phone (the general business
+  // line add_lead auto-fills from Google Places) — for when Google has it
+  // wrong, or a business has no Google listing at all. Deliberately not
+  // part of contact CRUD: this is the business's own line, not a specific
+  // person's — see contacts.phone (add_contact/update_contact) for
+  // owner/manager numbers.
+  if (action === "set_business_phone") {
+    const { data, error } = await admin
+      .from("businesses").update({ phone: p.phone || null }).eq("id", p.business_id)
+      .select("id, phone").single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
+  // ------------------------------------------------------- set_do_not_contact
+  // Reversible in both directions — the Call List's "Remove" button
+  // (value: true) and the drawer's own on/off toggle (either direction).
+  // log_pre_call's disqualifier path above only ever sets this flag; this
+  // is the way to clear it again once someone's ready to re-engage, or to
+  // pull a business off the Call List without logging a call outcome.
+  if (action === "set_do_not_contact") {
+    const { data, error } = await admin
+      .from("businesses").update({ do_not_contact: Boolean(p.value) }).eq("id", p.business_id)
+      .select("id, do_not_contact").single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
+  // ------------------------------------------------------ reset_call_schedule
+  // Call List "Reset" button: clears the primary contact's logged
+  // day/time-window fields, dropping the row back into the Unscheduled
+  // bucket — without log_pre_call's required-start-time validation and
+  // without writing a new pre_call activity (this undoes a stale or
+  // mislogged schedule, it isn't itself a call).
+  if (action === "reset_call_schedule") {
+    const { data: existing } = await admin
+      .from("contacts").select("id")
+      .eq("business_id", p.business_id).eq("is_primary", true).maybeSingle();
+    if (!existing) return json({ ok: true }); // nothing logged yet — nothing to reset
+    const { error } = await admin.from("contacts").update({
+      dm_days: null, dm_window: null, dm_window_start: null, dm_window_end: null, verified_at: null,
+    }).eq("id", existing.id);
+    if (error) return json({ error: error.message }, 400);
+    return json({ ok: true });
   }
 
   // --------------------------------------------------------- schedule_message
