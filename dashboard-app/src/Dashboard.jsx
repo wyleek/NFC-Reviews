@@ -394,8 +394,11 @@ export default function Dashboard() {
     : null;
   const topCardShare = topCard ? Math.round((cardTapsInRange(topCard.id) / Math.max(1, tapsInRange)) * 100) : 0;
 
+  // Only meaningful once there are taps to compare and more than one card
+  // to compare them across — otherwise it reads "Stand drives 0% of your
+  // taps" / "your other placements" with nothing behind it.
   const RECS = [
-    topCard && {
+    topCard && tapsInRange > 0 && cards.length > 1 && {
       tag: "Placement",
       title: `${topCard.label} drives ${topCardShare}% of your taps`,
       body: "Your other placements are underperforming by comparison. Move them to where customers are already standing still — waiting on an order, or paying.",
