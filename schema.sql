@@ -14,7 +14,7 @@
 -- layer and are recomputed on each refresh.
 -- =============================================================
 
-create extension if not exists postgis;
+create extension if not exists postgis with schema extensions;  -- not public: keeps spatial_ref_sys off the API (see 20261013120000)
 create extension if not exists pg_cron;
 
 -- =============================================================
