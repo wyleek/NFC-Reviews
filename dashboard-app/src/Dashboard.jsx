@@ -261,16 +261,23 @@ export default function Dashboard() {
   const { businessId, resolving } = useBusinessId();
   const { loading: bizLoading, business, cards, snapshots } = useBusinessData(businessId);
 
-  // The earliest date we actually have review-count data for — snapshots
-  // are ordered ascending, so [0] is it. Drives both "Live since" (below)
-  // and the range cap: neither should imply visibility into a stretch of
-  // time before this business was actually being tracked.
-  const earliestTrackedDate = useMemo(
-    () => (snapshots.length ? parseLocalDate(snapshots[0].captured_on) : null),
-    [snapshots],
-  );
+  // The earliest date we have any data for — the business's onboarding day,
+  // its first card, or its first review snapshot, whichever is earliest.
+  // Taps are kept forever, so this is when tracking really began even if
+  // older review snapshots were purged (they were, under the old 30-day
+  // retention job). Drives "Live since", the "All" range, and the range cap.
+  const earliestTrackedDate = useMemo(() => {
+    const candidates = [
+      business?.created_at && startOfDay(new Date(business.created_at)),
+      cards[0]?.created_at && startOfDay(new Date(cards[0].created_at)),
+      snapshots.length && parseLocalDate(snapshots[0].captured_on),
+    ].filter(Boolean);
+    return candidates.length ? new Date(Math.min(...candidates)) : null;
+  }, [business, cards, snapshots]);
 
-  const rawRangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
+  const rawRangeStart = custom
+    ? startOfDay(custom[0])
+    : range === "all" ? (earliestTrackedDate ?? today) : addDays(today, -(range - 1));
   const rangeEnd = custom ? startOfDay(custom[1]) : today;
   // Clamp, don't just cap the picker — a 60d/custom selection that reaches
   // further back than tracking began should quietly shrink to what's
@@ -303,7 +310,9 @@ export default function Dashboard() {
         key, d,
         date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
         taps: 0,
-        reviews: asOf ? asOf.review_count : (snapshots[0]?.review_count ?? business?.current_review_count ?? null),
+        // Days before the first snapshot stay null (a gap in the line), not
+        // back-filled with the first known count — that would read as known data.
+        reviews: asOf ? asOf.review_count : (snapshots.length ? null : business?.current_review_count ?? null),
       };
       for (const c of cards) row[c.id] = 0;
       out.push(row);
@@ -332,15 +341,16 @@ export default function Dashboard() {
 
   const days = data.length || 1;
   const tapsInRange = data.reduce((s, d) => s + d.taps, 0);
-  const revStart = data[0]?.reviews ?? null;
-  const revEnd = data[data.length - 1]?.reviews ?? revStart;
+  const known = data.filter((d) => d.reviews != null);
+  const revStart = known[0]?.reviews ?? null;
+  const revEnd = known[known.length - 1]?.reviews ?? revStart;
   const revGained = revStart != null && revEnd != null ? revEnd - revStart : 0;
 
   const velocity = (revGained / days) * 30;
 
   const label = custom
     ? `${rangeStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${rangeEnd.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-    : `Last ${range} days`;
+    : range === "all" ? "All time" : `Last ${range} days`;
 
   // Device + hourly splits, straight from the raw taps in the current range.
   const currentTaps = useMemo(
@@ -444,14 +454,14 @@ export default function Dashboard() {
 
           <div className="relative ml-auto" ref={wrapRef}>
             <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#f5f6f8" }}>
-              {[7, 30, 60].map((r) => {
+              {[7, 30, 60, "all"].map((r) => {
                 const on = !custom && range === r;
                 return (
                   <button key={r} onClick={() => { setRange(r); setCustom(null); setShowCal(false); }}
                     className="px-3 py-1.5 text-[13px] rounded-md transition"
                     style={{ background: on ? "#fff" : "transparent", color: on ? INK : MUTED,
                              fontWeight: on ? 600 : 400, boxShadow: on ? "0 1px 2px rgba(0,0,0,.06)" : "none" }}>
-                    {r}d
+                    {r === "all" ? "All" : `${r}d`}
                   </button>
                 );
               })}
