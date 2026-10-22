@@ -61,6 +61,7 @@
   padding:10px;cursor:pointer}
 .biz-card:hover{border-color:var(--accent)}
 .biz-card-name{font-weight:600;margin-bottom:4px;font-size:14px}
+.biz-card-city{font-weight:400;color:var(--muted);font-size:11px;margin-left:6px}
 .biz-card-meta{display:flex;gap:6px;align-items:center;font-size:11px;
   color:var(--muted);flex-wrap:wrap;margin-bottom:4px}
 .biz-card-footer{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}

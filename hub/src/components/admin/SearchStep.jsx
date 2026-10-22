@@ -53,7 +53,13 @@ export function SearchStep({
                 {b.name}
                 <span className="tag-local">Already on file</span>
               </div>
-              <div className="a">Stage: {STAGE_LABELS[b.stage] ?? b.stage}</div>
+              <div className="a">
+                Stage: {STAGE_LABELS[b.stage] ?? b.stage}
+                {/* City/zip is the disambiguator when two locations of the
+                    same chain both show up here (e.g. two "Ledo Pizza"
+                    rows) — without it they're identical in this list. */}
+                {b.city ? ` — ${b.city}${b.zip ? ` ${b.zip}` : ""}` : ""}
+              </div>
               <div className="stats">
                 <span>
                   <b>{b.current_review_count ?? "—"}</b> reviews
@@ -61,6 +67,7 @@ export function SearchStep({
                 <span>
                   <b>{b.current_rating ?? "—"}</b> ★
                 </span>
+                {b.phone ? <span>{b.phone}</span> : null}
               </div>
             </div>
           ))}

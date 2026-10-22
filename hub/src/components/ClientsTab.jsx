@@ -61,7 +61,7 @@ export function ClientsTab() {
 
       const { data: businesses, error: bizErr } = await supabase
         .from("businesses")
-        .select("id, name, current_review_count, current_rating")
+        .select("id, name, current_review_count, current_rating, phone, city, zip")
         .eq("stage", "customer")
         .order("name");
 
@@ -114,6 +114,9 @@ export function ClientsTab() {
         return {
           id: b.id,
           name: b.name,
+          phone: b.phone,
+          city: b.city,
+          zip: b.zip,
           rating: asOfToday?.rating ?? b.current_rating ?? null,
           reviewCount: current,
           gained14,
@@ -192,7 +195,17 @@ export function ClientsTab() {
           <div key={c.id} className="hit" style={{ cursor: "default" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span className={`health-dot ${c.health}`} title={HEALTH_LABEL[c.health]} />
-              <span className="n">{c.name}</span>
+              <span className="n">
+                {c.name}
+                {/* City/zip disambiguates same-named locations of a chain
+                    — without it two "Ledo Pizza" rows here are identical. */}
+                {c.city ? (
+                  <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12, marginLeft: 6 }}>
+                    {c.city}
+                    {c.zip ? ` ${c.zip}` : ""}
+                  </span>
+                ) : null}
+              </span>
             </div>
             <div className="stats" style={{ flexWrap: "wrap" }}>
               <span>
@@ -207,6 +220,7 @@ export function ClientsTab() {
               <span>
                 <b>{c.gained30 >= 0 ? `+${c.gained30}` : c.gained30}</b> last 30d
               </span>
+              {c.phone ? <span>{c.phone}</span> : null}
             </div>
             <a
               className="btn ghost sm"

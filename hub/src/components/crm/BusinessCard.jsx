@@ -26,11 +26,18 @@ export function BusinessCard({ business, onOpen, onMoveStage }) {
       onDragStart={(e) => e.dataTransfer.setData("text/plain", business.id)}
       onClick={() => onOpen(business)}
     >
-      <div className="biz-card-name">{business.name}</div>
+      <div className="biz-card-name">
+        {business.name}
+        {/* City disambiguates same-named locations of a chain — without
+            it two "Ledo Pizza" cards on the board look identical. */}
+        {business.city ? <span className="biz-card-city">{business.city}</span> : null}
+      </div>
       <div className="biz-card-meta">
         {business.category_group ? <span className="pill">{business.category_group}</span> : null}
         {business.tier ? <span className="pill">Tier {business.tier}</span> : null}
-        <span>{business.current_review_count ?? "?"} reviews</span>
+        <span>
+          {business.current_rating ?? "—"}★ ({business.current_review_count ?? "?"})
+        </span>
       </div>
       <div className="biz-card-footer">
         <span>{business.rank_score != null ? `Rank ${Number(business.rank_score).toFixed(1)}` : ""}</span>

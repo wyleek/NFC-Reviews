@@ -6,8 +6,8 @@ import { namesLikelyMatch, namesCollapseEqual } from "../../lib/nameMatch";
 import { PreCallLogForm } from "./PreCallLogForm";
 
 const BUSINESS_FIELDS =
-  "id, name, stage, google_place_id, phone, tier, rank_score, category_group, corridor, " +
-  "best_callback_window, do_not_contact, follow_up_at, created_at";
+  "id, name, stage, google_place_id, phone, city, zip, current_review_count, current_rating, " +
+  "tier, rank_score, category_group, corridor, best_callback_window, do_not_contact, follow_up_at, created_at";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -578,6 +578,15 @@ export function CallList({ search = "" }) {
                     <div>
                       <div className="call-row-name">
                         {business.name}
+                        {/* City/zip disambiguates same-named locations of a
+                            chain — without it two "Ledo Pizza" rows here
+                            are identical. */}
+                        {business.city ? (
+                          <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>
+                            {business.city}
+                            {business.zip ? ` ${business.zip}` : ""}
+                          </span>
+                        ) : null}
                         {tel ? (
                           <a className="call-row-phone" href={tel} onClick={(e) => e.stopPropagation()}>
                             Call {contact.phone}
@@ -598,6 +607,11 @@ export function CallList({ search = "" }) {
                           </span>
                         ) : null}
                         <span className="pill">{STAGE_LABELS[business.stage]}</span>
+                        {business.current_review_count != null ? (
+                          <span className="pill">
+                            {business.current_rating ?? "—"}★ ({business.current_review_count})
+                          </span>
+                        ) : null}
                         {business.tier ? <span className="pill">Tier {business.tier}</span> : null}
                         {isVisited ? <span className="pill">visited</span> : null}
                       </div>
