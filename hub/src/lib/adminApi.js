@@ -117,4 +117,16 @@ export const adminApi = {
   // Clears a business's logged call-schedule (days/time window) without
   // logging a new pre-call activity — CallList's "Reset" button.
   resetCallSchedule: (business_id) => call("reset_call_schedule", { business_id }),
+
+  // Owners — one point of contact that owns many businesses. createOwner makes
+  // the owner; assignBusinessOwner(business_id, owner_id) links a business to
+  // it (owner_id null/"" unlinks); listOwners returns each owner with the
+  // businesses grouped under them (shared with the dashboard's switcher).
+  createOwner: ({ name, email, phone, notes }) =>
+    call("create_owner", { name, email, phone, notes }),
+
+  listOwners: () => call("list_owners", {}),
+
+  assignBusinessOwner: (business_id, owner_id) =>
+    call("assign_business_owner", { business_id, owner_id }),
 };
