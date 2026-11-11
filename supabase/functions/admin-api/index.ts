@@ -760,5 +760,61 @@ Deno.serve(async (req) => {
     return json({ scheduled_message: data });
   }
 
+  // ---------------------------------------------------------------- owners
+  // One point of contact that can own MANY businesses (owners 1 ── * businesses).
+  // See 20261107120000_owners_multi_business.sql. The customer-facing dashboard
+  // reads owners/businesses directly via the anon key + RLS (to resolve
+  // ?owner=<uuid> and render its business switcher); every WRITE stays behind
+  // the service role here, same policy as the rest of this file.
+  if (action === "create_owner") {
+    if (!p.name || !String(p.name).trim()) return json({ error: "owner name is required" }, 400);
+    const { data, error } = await admin
+      .from("owners")
+      .insert({
+        name: String(p.name).trim(),
+        email: p.email ?? null,
+        phone: p.phone ?? null,
+        notes: p.notes ?? null,
+      })
+      .select("id, name, email, phone, notes, created_at")
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ owner: data });
+  }
+
+  // Owners, each with the businesses grouped under them. The hub's owner
+  // picker and the dashboard's business switcher both read this one shape.
+  if (action === "list_owners") {
+    const { data, error } = await admin
+      .from("owners")
+      .select(
+        "id, name, email, phone, notes, created_at, businesses:businesses(id, name, current_review_count, current_rating)",
+      )
+      .order("created_at", { ascending: false });
+    if (error) return json({ error: error.message }, 400);
+    return json({ owners: data ?? [] });
+  }
+
+  // Link a business to an owner, or (owner_id null/empty) clear the grouping.
+  // Nothing else about the business changes; on delete of an owner the FK is
+  // `on delete set null`, so unlinking here is the same reversible operation.
+  if (action === "assign_business_owner") {
+    if (!p.business_id) return json({ error: "business_id is required" }, 400);
+    const ownerId = p.owner_id || null;
+    if (ownerId) {
+      const { data: owner } = await admin
+        .from("owners").select("id").eq("id", ownerId).maybeSingle();
+      if (!owner) return json({ error: "owner not found" }, 400);
+    }
+    const { data, error } = await admin
+      .from("businesses")
+      .update({ owner_id: ownerId })
+      .eq("id", p.business_id)
+      .select("id, name, owner_id")
+      .single();
+    if (error) return json({ error: error.message }, 400);
+    return json({ business: data });
+  }
+
   return json({ error: "unknown action" }, 400);
 });

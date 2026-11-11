@@ -5,6 +5,7 @@ import { ACTIVITY_TYPE_LABELS, STAGE_LABELS } from "../../lib/stages";
 import { OutcomeButtons } from "./OutcomeButtons";
 import { VoiceNote } from "./VoiceNote";
 import { FollowUpPicker } from "./FollowUpPicker";
+import { OwnerPicker } from "./OwnerPicker";
 import { ContactsEditor } from "../shared/ContactsEditor";
 
 const CARD_TYPES = ["stand", "placard", "badge", "card"];
@@ -172,6 +173,11 @@ export function BusinessDrawer({ businessId, onClose, onChanged, onManageInAdmin
                 Manage in Admin ↗
               </button>
             ) : null}
+
+            <section>
+              <h3>Owner</h3>
+              <OwnerPicker business={business} onChanged={refresh} />
+            </section>
 
             <section>
               <h3>Follow-up</h3>

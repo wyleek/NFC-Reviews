@@ -100,4 +100,16 @@ export const adminApi = {
 
   // Call List quick-add — search_place + this is the whole flow (no wizard).
   addLead: (place_id, name) => call("add_lead", { place_id, name }),
+
+  // Owners — one point of contact that owns many businesses. createOwner makes
+  // the owner; assignBusinessOwner(business_id, owner_id) links a business to
+  // it (owner_id null/"" unlinks); listOwners returns each owner with the
+  // businesses grouped under them (shared with the dashboard's switcher).
+  createOwner: ({ name, email, phone, notes }) =>
+    call("create_owner", { name, email, phone, notes }),
+
+  listOwners: () => call("list_owners", {}),
+
+  assignBusinessOwner: (business_id, owner_id) =>
+    call("assign_business_owner", { business_id, owner_id }),
 };

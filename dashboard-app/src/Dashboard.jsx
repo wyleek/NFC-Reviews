@@ -2,18 +2,21 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Cell,
+  ResponsiveContainer, BarChart,
 } from "recharts";
 import {
-  ChevronRight, Smartphone, Zap, Check, Calendar,
-  Lightbulb, X,
+  ChevronRight, Check, Calendar, Lightbulb, X, Pencil,
 } from "lucide-react";
 
 /* ==================================================================
    SUPABASE — publishable key only, safe for the client. RLS grants
    read-only SELECT on these tables/views; all writes go through the
    service-role Edge Functions (admin-api, redirect, sync-reviews).
-   See supabase/migrations/*_dashboard_read_policies.sql.
+   The one exception is the `rename_card` RPC — a narrowly-scoped
+   security-definer function that can only edit a card's label, so the
+   business owner can rename their own cards from this dashboard without
+   the admin token. See supabase/migrations/*_dashboard_read_policies.sql
+   and *_rename_card_rpc.sql.
 ================================================================== */
 
 const SUPABASE_URL = "https://ehzwsqkrmxsfdfslxmpo.supabase.co";
@@ -25,19 +28,15 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const DAY_MS = 86400000;
 // Calendar day in the viewer's local timezone — must stay local, not UTC,
 // since it's used to bucket both local-midnight Date objects (below) and
-// parsed tap timestamps (via `new Date(t.created_at)`) onto the same axis
-// as the already-local "busiest hours" breakdown.
+// parsed tap timestamps (via `new Date(t.created_at)`) onto the same axis.
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const addDays = (d, n) => new Date(d.getTime() + n * DAY_MS);
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 // review_snapshots.captured_on is a plain "YYYY-MM-DD" date string, no
-// time/zone — `new Date(dateStr)` parses that as UTC midnight, which can
-// print as the previous day once toLocaleDateString applies the viewer's
-// local zone. Parse it as a local calendar date instead, same as every
-// other date in this file.
+// time/zone — parse it as a local calendar date, same as every other date here.
 const parseLocalDate = (dateStr) => { const [y, m, d] = dateStr.split("-").map(Number); return new Date(y, m - 1, d); };
 
-// Most recent snapshot with captured_on <= dateStr (snapshots must be sorted ascending).
+// Most recent snapshot with captured_on <= dateStr (snapshots sorted ascending).
 function snapshotAsOf(snapshots, dateStr) {
   let found = null;
   for (const s of snapshots) {
@@ -48,15 +47,25 @@ function snapshotAsOf(snapshots, dateStr) {
 }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const HOUR_BUCKETS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]; // 6a – 7p
-const hourLabel = (h) => (h === 12 ? "12p" : h > 12 ? `${h - 12}p` : `${h}a`);
 
-const INK = "#12141a", ACCENT = "#2f5eff", MUTED = "#8a8f9a", LINE = "#e8e9ed", SOFT = "#c9d4ff";
+/* ==================================================================
+   THEME — matched to the WM Marketing website (wmmarketing.agency):
+   Inter Tight, black ink, navy accent, black editorial rules.
+================================================================== */
+const FONT = "'Inter Tight', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+const INK = "#111111";      // --ink
+const ACCENT = "#22357a";   // --accent (navy blue, charts + highlights)
+const NAVY = "#1e2a4a";     // --navy (filled buttons)
+const MUTED = "#5c626e";    // --muted
+const LINE = "#dcdcdc";     // --hair — light hairlines inside panels / chart grid
+const SOFT = "#c6cde3";     // light navy tint for secondary bars
+const PILL = "#111111";     // black outline around every pill/panel (--rule)
 
 /* ================================ bits ================================ */
 
+// Panel = the "pill". Black 1px outline so each one stands out against the page.
 const Panel = ({ children, className = "", style = {} }) => (
-  <div className={`border rounded-xl bg-white ${className}`} style={{ borderColor: LINE, ...style }}>{children}</div>
+  <div className={`rounded-xl bg-white ${className}`} style={{ border: `1px solid ${PILL}`, ...style }}>{children}</div>
 );
 
 const Title = ({ children, sub }) => (
@@ -69,7 +78,7 @@ const Title = ({ children, sub }) => (
 function Tip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-white border rounded-lg px-3 py-2 shadow-md text-[12px]" style={{ borderColor: LINE }}>
+    <div className="bg-white rounded-lg px-3 py-2 shadow-md text-[12px]" style={{ border: `1px solid ${PILL}` }}>
       <div className="font-semibold mb-1" style={{ color: INK }}>{label}</div>
       {payload.map((p) => (
         <div key={p.dataKey} className="flex items-center justify-between gap-5" style={{ color: MUTED }}>
@@ -107,7 +116,7 @@ function RangePicker({ today, minDate, onApply, onClose }) {
   const inRange = (d) => start && end && d > start && d < end;
 
   return (
-    <div className="absolute right-0 top-11 z-30 bg-white border rounded-xl shadow-lg p-4 w-[300px]" style={{ borderColor: LINE }}>
+    <div className="absolute right-0 top-11 z-30 bg-white rounded-xl shadow-lg p-4 w-[300px]" style={{ border: `1px solid ${PILL}` }}>
       <div className="flex items-center justify-between mb-3">
         <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
                 className="px-2 py-1 rounded hover:bg-[#f5f6f8] text-[15px]" style={{ color: MUTED }}>‹</button>
@@ -126,15 +135,12 @@ function RangePicker({ today, minDate, onApply, onClose }) {
           const sel = (start && d.getTime() === start.getTime()) || (end && d.getTime() === end.getTime());
           const mid = inRange(d);
           const future = d > today;
-          // Nothing was tracked before the first review snapshot — a date
-          // earlier than that can only ever render as a flat, misleading
-          // line, so it isn't a real choice here.
           const tooEarly = minDate && d < minDate;
           return (
             <button key={i} disabled={future || tooEarly} onClick={() => pick(d)}
               className="h-8 text-[12px] rounded-md transition disabled:opacity-25"
               style={{
-                background: sel ? ACCENT : mid ? "#eef2ff" : "transparent",
+                background: sel ? ACCENT : mid ? "#eef1f8" : "transparent",
                 color: sel ? "#fff" : INK, fontWeight: sel ? 600 : 400,
               }}>
               {d.getDate()}
@@ -152,7 +158,7 @@ function RangePicker({ today, minDate, onApply, onClose }) {
           <button onClick={onClose} className="px-2.5 py-1.5 text-[12px] rounded-md" style={{ color: MUTED }}>Cancel</button>
           <button disabled={!start || !end} onClick={() => onApply(start, end)}
                   className="px-3 py-1.5 text-[12px] rounded-md text-white font-medium disabled:opacity-35"
-                  style={{ background: ACCENT }}>Apply</button>
+                  style={{ background: NAVY }}>Apply</button>
         </div>
       </div>
     </div>
@@ -161,35 +167,44 @@ function RangePicker({ today, minDate, onApply, onClose }) {
 
 /* ============================ data loading ============================ */
 
-// Resolves which business to show: ?business=<uuid> in the URL, or (until
-// there's per-business login) the most recently created one.
-function useBusinessId() {
-  const [businessId, setBusinessId] = useState(null);
-  const [resolving, setResolving] = useState(true);
+// Resolves which business(es) to show:
+//   ?owner=<uuid>    → EVERY business that owner owns, for the switcher
+//   ?business=<uuid> → that one business
+//   (neither)        → most recently created business (single-tenant fallback)
+// Returns a flat [{ id, name }] list; the switcher appears whenever it has >1.
+function useResolvedBusinesses() {
+  const [state, setState] = useState({ resolving: true, businesses: [] });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const fromUrl = new URLSearchParams(window.location.search).get("business");
-      if (fromUrl) { setBusinessId(fromUrl); setResolving(false); return; }
-      const { data } = await supabase
-        .from("businesses").select("id").order("created_at", { ascending: false }).limit(1);
-      if (!cancelled) { setBusinessId(data?.[0]?.id ?? null); setResolving(false); }
+      const params = new URLSearchParams(window.location.search);
+      const ownerId = params.get("owner");
+      const bizId = params.get("business");
+      let businesses = [];
+      if (ownerId) {
+        const { data } = await supabase
+          .from("businesses").select("id, name").eq("owner_id", ownerId).order("name");
+        businesses = data ?? [];
+      } else if (bizId) {
+        const { data } = await supabase
+          .from("businesses").select("id, name").eq("id", bizId).maybeSingle();
+        businesses = data ? [data] : [];
+      } else {
+        const { data } = await supabase
+          .from("businesses").select("id, name").order("created_at", { ascending: false }).limit(1);
+        businesses = data ?? [];
+      }
+      if (!cancelled) setState({ resolving: false, businesses });
     })();
     return () => { cancelled = true; };
   }, []);
 
-  return { businessId, resolving };
+  return state;
 }
 
 // Business, cards, full review-snapshot history — refetched only when the
 // business changes, not on every range change.
-//
-// Competitor tracking (competitors/competitor_velocity/competitor_snapshots)
-// was pulled out of this dashboard — the feature isn't ready yet (see the
-// competitor-rolling-tracking branch, which never actually landed any
-// implementation). The tables and the admin-api add_competitor action are
-// still in place, just unused, so this is easy to bring back later.
 function useBusinessData(businessId) {
   const [state, setState] = useState({ loading: true, business: null, cards: [], snapshots: [] });
 
@@ -200,15 +215,11 @@ function useBusinessData(businessId) {
       setState((s) => ({ ...s, loading: true }));
       const [{ data: business }, { data: cards }, { data: snapshots }] = await Promise.all([
         supabase.from("businesses").select("*").eq("id", businessId).maybeSingle(),
-        // active-only: an inactive card is a deactivated duplicate (see the
-        // Yogamour dedup cleanup), not a real placement — it shouldn't count
-        // toward "N cards placed" or show up in the By-card breakdown.
         supabase.from("cards").select("*").eq("business_id", businessId).eq("active", true).order("created_at"),
         supabase.from("review_snapshots").select("captured_on, review_count, rating")
           .eq("business_id", businessId).order("captured_on"),
       ]);
       if (cancelled) return;
-
       setState({
         loading: false,
         business: business ?? null,
@@ -222,9 +233,34 @@ function useBusinessData(businessId) {
   return state;
 }
 
+// Lifetime (all-time) tap count per card — independent of the selected range,
+// so each card can always show its true total. One light head-count per card.
+function useLifetimeCardTaps(businessId, cards) {
+  const [counts, setCounts] = useState({});
+  const cardIdsKey = cards.map((c) => c.id).join(",");
+
+  useEffect(() => {
+    if (!businessId || !cards.length) { setCounts({}); return; }
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(cards.map(async (c) => {
+        const { count } = await supabase
+          .from("taps")
+          .select("id", { count: "exact", head: true })
+          .eq("business_id", businessId).eq("card_id", c.id).eq("is_repeat", false);
+        return [c.id, count ?? 0];
+      }));
+      if (!cancelled) setCounts(Object.fromEntries(entries));
+    })();
+    return () => { cancelled = true; };
+  }, [businessId, cardIdsKey]);
+
+  return counts;
+}
+
 // Raw taps for [priorStart, rangeEnd] — priorStart back-fills enough history
-// for accurate snapshot forward-filling, while the current-period rows drive
-// the per-card breakdown, device split, and hourly split, all from one query.
+// for accurate snapshot forward-filling; current-period rows drive the
+// per-card breakdown.
 function useTaps(businessId, priorStart, rangeEnd) {
   const [state, setState] = useState({ loading: true, taps: [] });
 
@@ -253,36 +289,64 @@ function useTaps(businessId, priorStart, rangeEnd) {
 export default function Dashboard() {
   const today = useMemo(() => startOfDay(new Date()), []);
   const [range, setRange] = useState(30);
+  const [allTime, setAllTime] = useState(false);
   const [custom, setCustom] = useState(null);
   const [showCal, setShowCal] = useState(false);
   const [openCard, setOpenCard] = useState(null);
+  const [cardSort, setCardSort] = useState("order"); // "order" | "taps"
+  const [editingCard, setEditingCard] = useState(null);
+  const [editValue, setEditValue] = useState("");
+  const [labelOverrides, setLabelOverrides] = useState({});
+  const [cardErr, setCardErr] = useState(null);
   const wrapRef = useRef(null);
 
-  const { businessId, resolving } = useBusinessId();
-  const { loading: bizLoading, business, cards, snapshots } = useBusinessData(businessId);
+  const { resolving, businesses } = useResolvedBusinesses();
+  const [selectedId, setSelectedId] = useState(null);
+  useEffect(() => {
+    if (businesses.length && !businesses.some((b) => b.id === selectedId)) {
+      setSelectedId(businesses[0].id);
+    }
+  }, [businesses, selectedId]);
+  const businessId = selectedId ?? businesses[0]?.id ?? null;
 
-  // The earliest date we actually have review-count data for — snapshots
-  // are ordered ascending, so [0] is it. Drives both "Live since" (below)
-  // and the range cap: neither should imply visibility into a stretch of
-  // time before this business was actually being tracked.
+  const { loading: bizLoading, business, cards, snapshots } = useBusinessData(businessId);
+  const lifetimeTaps = useLifetimeCardTaps(businessId, cards);
+
+  // Reset per-business UI when switching dashboards.
+  useEffect(() => {
+    setOpenCard(null); setEditingCard(null); setLabelOverrides({}); setCardErr(null);
+  }, [businessId]);
+
   const earliestTrackedDate = useMemo(
     () => (snapshots.length ? parseLocalDate(snapshots[0].captured_on) : null),
     [snapshots],
   );
 
-  const rawRangeStart = custom ? startOfDay(custom[0]) : addDays(today, -(range - 1));
+  // "All time" reaches back to whichever is earliest: when the business was
+  // onboarded, or the first review snapshot.
+  const allTimeStart = useMemo(() => {
+    const c = business?.created_at ? startOfDay(new Date(business.created_at)) : null;
+    const e = earliestTrackedDate;
+    if (c && e) return c < e ? c : e;
+    return c || e || addDays(today, -364);
+  }, [business, earliestTrackedDate, today]);
+
+  const rawRangeStart = custom
+    ? startOfDay(custom[0])
+    : allTime
+      ? allTimeStart
+      : addDays(today, -(range - 1));
   const rangeEnd = custom ? startOfDay(custom[1]) : today;
-  // Clamp, don't just cap the picker — a 60d/custom selection that reaches
-  // further back than tracking began should quietly shrink to what's
-  // actually available rather than pad the chart with a flat "0 gained"
-  // stretch that looks like real, known data.
-  const rangeStart = earliestTrackedDate && rawRangeStart < earliestTrackedDate ? earliestTrackedDate : rawRangeStart;
+  // Clamp the review line to when tracking actually began — but NOT in
+  // all-time mode, where we want every tap included even before snapshots.
+  const rangeStart = (!allTime && earliestTrackedDate && rawRangeStart < earliestTrackedDate)
+    ? earliestTrackedDate
+    : rawRangeStart;
   const wasClamped = rangeStart.getTime() !== rawRangeStart.getTime();
   const spanDays = Math.max(1, Math.round((rangeEnd - rangeStart) / DAY_MS) + 1);
   const priorStart = addDays(rangeStart, -spanDays);
-  const priorEnd = addDays(rangeStart, -1);
 
-  const { loading: tapsLoading, taps } = useTaps(businessId, priorStart, rangeEnd);
+  const { taps } = useTaps(businessId, priorStart, rangeEnd);
 
   useEffect(() => {
     const h = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setShowCal(false); };
@@ -290,8 +354,6 @@ export default function Dashboard() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // One bucket per day in [priorStart, rangeEnd], each with a total, a count
-  // per card, and a forward-filled cumulative review count from snapshots.
   const allDays = useMemo(() => {
     const out = [];
     const n = Math.round((rangeEnd - priorStart) / DAY_MS) + 1;
@@ -336,103 +398,84 @@ export default function Dashboard() {
   const revEnd = data[data.length - 1]?.reviews ?? revStart;
   const revGained = revStart != null && revEnd != null ? revEnd - revStart : 0;
 
-  const velocity = (revGained / days) * 30;
-
   const label = custom
     ? `${rangeStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${rangeEnd.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : allTime ? "All time"
+    : range === 1 ? "Today"
     : `Last ${range} days`;
 
-  // Device + hourly splits, straight from the raw taps in the current range.
-  const currentTaps = useMemo(
-    () => taps.filter((t) => { const d = new Date(t.created_at); return d >= rangeStart && d < addDays(rangeEnd, 1); }),
-    [taps, rangeStart.getTime(), rangeEnd.getTime()],
-  );
-
-  const DEVICES = useMemo(() => {
-    const counts = { ios: 0, android: 0, other: 0 };
-    for (const t of currentTaps) counts[t.device_type === "ios" || t.device_type === "android" ? t.device_type : "other"]++;
-    const total = Math.max(1, currentTaps.length);
-    return [
-      { name: "iPhone", value: Math.round((counts.ios / total) * 100) },
-      { name: "Android", value: Math.round((counts.android / total) * 100) },
-      { name: "Other", value: Math.round((counts.other / total) * 100) },
-    ];
-  }, [currentTaps]);
-
-  const HOURS = useMemo(() => {
-    const counts = Object.fromEntries(HOUR_BUCKETS.map((h) => [h, 0]));
-    for (const t of currentTaps) {
-      const h = new Date(t.created_at).getHours();
-      if (counts[h] != null) counts[h]++;
-    }
-    return HOUR_BUCKETS.map((h) => ({ h: hourLabel(h), v: counts[h] }));
-  }, [currentTaps]);
-
-  const peakHour = useMemo(() => Math.max(0, ...HOURS.map((h) => h.v)), [HOURS]);
-
-  const busiestHours = useMemo(() => {
-    const top = [...HOURS].sort((a, b) => b.v - a.v).filter((h) => h.v > 0).slice(0, 2);
-    return top.map((h) => h.h).join(" and ");
-  }, [HOURS]);
-
-  // Each stat gets its own rounded Panel instead of one panel sliced up with
-  // divide-x — a Tailwind divide-x border defaults to a hard black line with
-  // no color override, which read as a stray hard rule between everything.
-  const Metric = ({ label: l, value, sub }) => (
-    <Panel className="flex-1 min-w-[160px] px-6 py-6">
-      <div className="text-[11px] uppercase tracking-[0.1em] mb-3" style={{ color: MUTED }}>{l}</div>
-      <div className="flex items-end gap-2.5">
-        <div className="text-[46px] leading-[0.9] font-bold tabular-nums tracking-tight" style={{ color: INK }}>{value}</div>
-      </div>
-      {sub && <div className="text-[12px] mt-2.5" style={{ color: MUTED }}>{sub}</div>}
-    </Panel>
-  );
-
   const cardTapsInRange = (id) => data.reduce((s, d) => s + (d[id] ?? 0), 0);
-  const topCard = cards.length
-    ? [...cards].sort((a, b) => cardTapsInRange(b.id) - cardTapsInRange(a.id))[0]
-    : null;
-  const topCardShare = topCard ? Math.round((cardTapsInRange(topCard.id) / Math.max(1, tapsInRange)) * 100) : 0;
+
+  // Card order: as placed, or ranked by taps in the current period.
+  const orderedCards = useMemo(() => {
+    if (cardSort === "taps") return [...cards].sort((a, b) => cardTapsInRange(b.id) - cardTapsInRange(a.id));
+    return cards;
+  }, [cards, cardSort, data]);
+
+  const cardLabel = (c) => labelOverrides[c.id] ?? c.label ?? "";
+
+  async function saveCardName(cardId) {
+    const next = editValue.trim();
+    if (!next) { setEditingCard(null); return; }
+    setCardErr(null);
+    const { error } = await supabase.rpc("rename_card", { p_card_id: cardId, p_label: next });
+    if (error) {
+      setCardErr("Couldn't rename the card — please try again in a moment.");
+      return;
+    }
+    setLabelOverrides((prev) => ({ ...prev, [cardId]: next }));
+    setEditingCard(null);
+  }
 
   const RECS = [
-    topCard && {
-      tag: "Placement",
-      title: `${topCard.label} drives ${topCardShare}% of your taps`,
-      body: "Your other placements are underperforming by comparison. Move them to where customers are already standing still — waiting on an order, or paying.",
-    },
-    busiestHours && {
-      tag: "Timing",
-      title: `${busiestHours} ${busiestHours.includes(" and ") ? "are" : "is"} your busiest tap hour${busiestHours.includes(" and ") ? "s" : ""}`,
-      body: "Remind whoever works those shifts to mention the card. A spoken ask alongside the stand consistently outperforms the stand sitting there on its own.",
-    },
     {
       tag: "Staff habit",
       title: "Ask every customer, not just the happy-looking ones",
-      body: "Google prohibits filtering who gets asked based on expected rating, and asking everyone honestly keeps your profile safe. Try: \"If you enjoyed it, we'd love your honest feedback — just tap here.\"",
+      body: "Google prohibits filtering who gets asked based on expected rating, so asking everyone honestly keeps your profile safe. Try saying: “If you enjoyed your experience today, we’d really appreciate a Google review — super simple, just tap right here.” Then demonstrate the tap for them; it takes them straight to the review page.",
     },
-  ].filter(Boolean);
+  ];
 
   if (resolving || (businessId && bizLoading)) {
-    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: "-apple-system, sans-serif" }}>Loading…</div>;
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: FONT }}>Loading…</div>;
   }
   if (!businessId || !business) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: "-apple-system, sans-serif", textAlign: "center", padding: 24 }}>
-        No business found. Onboard one in admin.html, then open this dashboard with <code>?business=&lt;id&gt;</code>.
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: MUTED, fontFamily: FONT, textAlign: "center", padding: 24 }}>
+        No business found for this link. Check the dashboard URL, or onboard a business in admin.html.
       </div>
     );
   }
 
   return (
-    <div style={{ background: "#fbfbfc", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
-      <div className="border-b bg-white sticky top-0 z-20" style={{ borderColor: LINE }}>
-        <div className="max-w-[1080px] mx-auto px-6 h-14 flex items-center gap-2">
-          <Zap size={16} style={{ color: ACCENT }} />
-          <span className="text-[14px] font-semibold tracking-tight" style={{ color: INK }}>WM Marketing</span>
+    <div style={{ background: "#fbfbfc", minHeight: "100vh", fontFamily: FONT }}>
+      <div className="border-b bg-white sticky top-0 z-20" style={{ borderColor: PILL }}>
+        <div className="max-w-[1080px] mx-auto px-6 h-14 flex items-center">
+          <img src="/logo.png" alt="WM Marketing" style={{ height: 24, width: "auto" }} />
         </div>
       </div>
 
       <div className="max-w-[1080px] mx-auto px-6 py-10">
+        {/* Dashboard switcher — one button per business the owner owns. */}
+        {businesses.length > 1 && (
+          <div className="flex flex-wrap gap-2 mb-7">
+            {businesses.map((b) => {
+              const on = b.id === businessId;
+              return (
+                <button key={b.id} onClick={() => setSelectedId(b.id)}
+                  className="px-3.5 py-2 text-[13px] rounded-lg transition"
+                  style={{
+                    background: on ? NAVY : "#fff",
+                    color: on ? "#fff" : INK,
+                    border: `1px solid ${on ? NAVY : PILL}`,
+                    fontWeight: on ? 600 : 500,
+                  }}>
+                  {b.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div className="flex items-end justify-between flex-wrap gap-4 mb-6">
           <div>
             <div className="text-[11px] uppercase tracking-[0.14em] mb-2" style={{ color: MUTED }}>Review activity</div>
@@ -443,28 +486,34 @@ export default function Dashboard() {
           </div>
 
           <div className="relative ml-auto" ref={wrapRef}>
-            <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#f5f6f8" }}>
-              {[7, 30, 60].map((r) => {
-                const on = !custom && range === r;
+            <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#eef0f3", border: `1px solid ${PILL}` }}>
+              {[1, 7, 30, 60].map((r) => {
+                const on = !custom && !allTime && range === r;
                 return (
-                  <button key={r} onClick={() => { setRange(r); setCustom(null); setShowCal(false); }}
+                  <button key={r} onClick={() => { setRange(r); setCustom(null); setAllTime(false); setShowCal(false); }}
                     className="px-3 py-1.5 text-[13px] rounded-md transition"
                     style={{ background: on ? "#fff" : "transparent", color: on ? INK : MUTED,
-                             fontWeight: on ? 600 : 400, boxShadow: on ? "0 1px 2px rgba(0,0,0,.06)" : "none" }}>
-                    {r}d
+                             fontWeight: on ? 600 : 400, boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>
+                    {r === 1 ? "1d" : `${r}d`}
                   </button>
                 );
               })}
+              <button onClick={() => { setAllTime(true); setCustom(null); setShowCal(false); }}
+                className="px-3 py-1.5 text-[13px] rounded-md transition"
+                style={{ background: allTime ? "#fff" : "transparent", color: allTime ? INK : MUTED,
+                         fontWeight: allTime ? 600 : 400, boxShadow: allTime ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>
+                All
+              </button>
               <button onClick={() => setShowCal(!showCal)}
                 className="px-3 py-1.5 text-[13px] rounded-md transition flex items-center gap-1.5"
                 style={{ background: custom || showCal ? "#fff" : "transparent", color: custom || showCal ? INK : MUTED,
-                         fontWeight: custom || showCal ? 600 : 400, boxShadow: custom || showCal ? "0 1px 2px rgba(0,0,0,.06)" : "none" }}>
+                         fontWeight: custom || showCal ? 600 : 400, boxShadow: custom || showCal ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>
                 <Calendar size={13} /> {custom ? label : "Custom"}
                 {custom && <X size={12} onClick={(e) => { e.stopPropagation(); setCustom(null); }} />}
               </button>
             </div>
             {showCal && <RangePicker today={today} minDate={earliestTrackedDate} onClose={() => setShowCal(false)}
-              onApply={(s, e) => { setCustom([s, e]); setShowCal(false); }} />}
+              onApply={(s, e) => { setCustom([s, e]); setAllTime(false); setShowCal(false); }} />}
             {wasClamped && !showCal && (
               <div className="text-[11px] text-right mt-1.5 whitespace-nowrap" style={{ color: MUTED }}>
                 Showing from {rangeStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — earliest tracked data
@@ -494,7 +543,7 @@ export default function Dashboard() {
               <XAxis dataKey="date" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(days / 6))} />
               <YAxis yAxisId="l" tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
               <YAxis yAxisId="r" orientation="right" domain={['dataMin - 1', 'dataMax + 1']} tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} />
-              <Tooltip content={<Tip />} cursor={{ fill: "#f7f8fa" }} />
+              <Tooltip content={<Tip />} cursor={{ fill: "#f2f3f6" }} />
               <Bar yAxisId="l" dataKey="taps" name="Taps" fill={SOFT} radius={[3, 3, 0, 0]} maxBarSize={18} />
               <Line yAxisId="r" dataKey="reviews" name="Total reviews" stroke={ACCENT} strokeWidth={2} dot={false} connectNulls />
             </ComposedChart>
@@ -506,11 +555,30 @@ export default function Dashboard() {
         </Panel>
 
         <Panel className="mb-3 overflow-hidden">
-          <div className="px-6 pt-6"><Title sub={cards.length ? `${cards.length} cards placed · open a row for its own chart` : "No cards placed yet"}>By card</Title></div>
-          {cards.map((c) => {
+          <div className="px-6 pt-6 flex items-start justify-between gap-3 flex-wrap">
+            <Title sub={cards.length ? `${cards.length} cards placed · open a row for its own chart` : "No cards placed yet"}>By card</Title>
+            {cards.length > 1 && (
+              <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#eef0f3", border: `1px solid ${PILL}` }}>
+                {[["order", "As placed"], ["taps", "Most taps"]].map(([v, l]) => {
+                  const on = cardSort === v;
+                  return (
+                    <button key={v} onClick={() => setCardSort(v)}
+                      className="px-3 py-1.5 text-[12px] rounded-md transition"
+                      style={{ background: on ? "#fff" : "transparent", color: on ? INK : MUTED,
+                               fontWeight: on ? 600 : 400, boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>
+                      {l}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {cardErr && <div className="px-6 text-[12px]" style={{ color: "#c0392b" }}>{cardErr}</div>}
+          {orderedCards.map((c) => {
             const cardTaps = cardTapsInRange(c.id);
             const share = Math.round((cardTaps / Math.max(1, tapsInRange)) * 100);
             const open = openCard === c.id;
+            const lifetime = lifetimeTaps[c.id];
             const byWeekday = WEEKDAYS.map((name, i) => ({
               name, taps: data.filter((d) => d.d.getDay() === i).reduce((s, d) => s + (d[c.id] ?? 0), 0),
             }));
@@ -519,23 +587,46 @@ export default function Dashboard() {
               : null;
             return (
               <div key={c.id} style={{ borderTop: `1px solid ${LINE}` }}>
-                <button onClick={() => setOpenCard(open ? null : c.id)}
-                  className="w-full px-6 py-4 flex items-center gap-4 hover:bg-[#fafbfc] transition text-left">
-                  <ChevronRight size={15} style={{ color: MUTED, transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+                <div className="w-full px-6 py-4 flex items-center gap-4 hover:bg-[#fafbfc] transition">
+                  <button onClick={() => setOpenCard(open ? null : c.id)} className="shrink-0" aria-label="Toggle card detail">
+                    <ChevronRight size={15} style={{ color: MUTED, transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+                  </button>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[14px] font-semibold" style={{ color: INK }}>{c.label || "Untitled card"}</div>
+                    {editingCard === c.id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={editValue}
+                          autoFocus
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveCardName(c.id); if (e.key === "Escape") setEditingCard(null); }}
+                          className="text-[14px] font-semibold px-2 py-1 rounded-md outline-none"
+                          style={{ color: INK, border: `1px solid ${PILL}`, maxWidth: 220 }}
+                        />
+                        <button onClick={() => saveCardName(c.id)} className="text-[12px] font-semibold px-2 py-1 rounded-md text-white" style={{ background: NAVY }}>Save</button>
+                        <button onClick={() => setEditingCard(null)} className="text-[12px] px-2 py-1 rounded-md" style={{ color: MUTED }}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 group">
+                        <span className="text-[14px] font-semibold" style={{ color: INK }}>{cardLabel(c) || "Untitled card"}</span>
+                        <button
+                          onClick={() => { setEditingCard(c.id); setEditValue(cardLabel(c)); setCardErr(null); }}
+                          className="opacity-50 hover:opacity-100 transition" aria-label="Rename card" title="Rename card">
+                          <Pencil size={12} style={{ color: MUTED }} />
+                        </button>
+                      </div>
+                    )}
                     <div className="text-[12px] capitalize" style={{ color: MUTED }}>{c.card_type}</div>
                   </div>
                   <div className="hidden sm:block w-28">
-                    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
+                    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#eceef2" }}>
                       <div className="h-full rounded-full" style={{ width: `${share}%`, background: ACCENT }} />
                     </div>
                   </div>
-                  <div className="text-right w-24">
+                  <div className="text-right w-28">
                     <div className="text-[20px] font-bold tabular-nums" style={{ color: INK }}>{cardTaps}</div>
-                    <div className="text-[11px]" style={{ color: MUTED }}>{share}% of taps</div>
+                    <div className="text-[11px]" style={{ color: MUTED }}>{share}% · {lifetime != null ? `${lifetime} all-time` : "…"}</div>
                   </div>
-                </button>
+                </div>
                 {open && (
                   <div className="px-6 pb-6 pt-1" style={{ background: "#fcfcfd" }}>
                     <ResponsiveContainer width="100%" height={130}>
@@ -543,12 +634,13 @@ export default function Dashboard() {
                         <CartesianGrid vertical={false} stroke={LINE} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: MUTED }} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(days / 5))} />
                         <YAxis tick={{ fontSize: 10, fill: MUTED }} axisLine={false} tickLine={false} />
-                        <Tooltip content={<Tip />} cursor={{ fill: "#f2f4f8" }} />
+                        <Tooltip content={<Tip />} cursor={{ fill: "#eef0f4" }} />
                         <Bar dataKey={c.id} name="Taps" fill={ACCENT} radius={[2, 2, 0, 0]} maxBarSize={14} />
                       </BarChart>
                     </ResponsiveContainer>
                     <div className="mt-4 flex flex-wrap gap-6 text-[12px]" style={{ color: MUTED }}>
                       <span>Link: <code className="px-1.5 py-0.5 rounded" style={{ background: "#f2f3f6", color: INK }}>{REDIRECT_BASE.replace("https://", "")}/{c.slug}</code></span>
+                      <span>Lifetime taps: <span style={{ color: INK, fontWeight: 600 }}>{lifetime != null ? lifetime : "…"}</span></span>
                       <span>Status: <span style={{ color: c.active ? "#1a7f4b" : "#c0392b" }}>{c.active ? "● Active" : "○ Inactive"}</span></span>
                       {busiestDay && <span>Busiest day: {busiestDay}</span>}
                     </div>
@@ -559,50 +651,15 @@ export default function Dashboard() {
           })}
         </Panel>
 
-        <div className="grid md:grid-cols-2 gap-3 mb-3">
-          <Panel className="p-6">
-            <div className="flex items-center gap-2">
-              <Smartphone size={14} style={{ color: MUTED }} />
-              <Title sub="Device type only — no personal information is collected">Phones used</Title>
-            </div>
-            {tapsInRange === 0
-              ? <div className="text-[13px]" style={{ color: MUTED }}>No taps in this period yet.</div>
-              : DEVICES.map((d, i) => (
-                <div key={d.name} className="flex items-center gap-3 mb-3">
-                  <div className="w-16 text-[13px]" style={{ color: INK }}>{d.name}</div>
-                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#f0f1f4" }}>
-                    <div className="h-full rounded-full" style={{ width: `${d.value}%`, background: ACCENT, opacity: 1 - i * 0.28 }} />
-                  </div>
-                  <div className="w-10 text-right text-[13px] tabular-nums font-medium" style={{ color: MUTED }}>{d.value}%</div>
-                </div>
-              ))}
-          </Panel>
-
-          <Panel className="p-6">
-            <Title sub="When customers tap — good times to remind staff to ask">Busiest hours</Title>
-            <ResponsiveContainer width="100%" height={150}>
-              <BarChart data={HOURS} margin={{ top: 4, right: 4, left: -26, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke={LINE} />
-                <XAxis dataKey="h" tick={{ fontSize: 10, fill: MUTED }} axisLine={false} tickLine={false} interval={1} />
-                <YAxis tick={{ fontSize: 10, fill: MUTED }} axisLine={false} tickLine={false} />
-                <Tooltip content={<Tip />} cursor={{ fill: "#f7f8fa" }} />
-                <Bar dataKey="v" name="Taps" radius={[2, 2, 0, 0]}>
-                  {HOURS.map((h, i) => <Cell key={i} fill={h.v > 0 && h.v === peakHour ? ACCENT : SOFT} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Panel>
-        </div>
-
         <Panel className="p-6">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-5">
             <Lightbulb size={14} style={{ color: MUTED }} />
-            <Title sub="Based on your tap patterns this period">What to do next</Title>
+            <div className="text-[15px] font-semibold" style={{ color: INK }}>What to do next</div>
           </div>
           <div className="space-y-2">
             {RECS.map((r, i) => (
-              <div key={i} className="flex gap-4 p-4 rounded-lg" style={{ background: "#fafbfc" }}>
-                <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5" style={{ background: "#eef2ff" }}>
+              <div key={i} className="flex gap-4 p-4 rounded-lg" style={{ background: "#fafbfc", border: `1px solid ${LINE}` }}>
+                <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5" style={{ background: "#e9edf6" }}>
                   <Check size={13} style={{ color: ACCENT }} />
                 </div>
                 <div>
@@ -615,6 +672,17 @@ export default function Dashboard() {
           </div>
         </Panel>
       </div>
+    </div>
+  );
+}
+
+/* Metric pill — its own black-outlined panel. */
+function Metric({ label, value, sub }) {
+  return (
+    <div className="flex-1 min-w-[160px] px-6 py-6 rounded-xl bg-white" style={{ border: `1px solid ${PILL}` }}>
+      <div className="text-[11px] uppercase tracking-[0.1em] mb-3" style={{ color: MUTED }}>{label}</div>
+      <div className="text-[46px] leading-[0.9] font-bold tabular-nums tracking-tight" style={{ color: INK }}>{value}</div>
+      {sub && <div className="text-[12px] mt-2.5" style={{ color: MUTED }}>{sub}</div>}
     </div>
   );
 }
